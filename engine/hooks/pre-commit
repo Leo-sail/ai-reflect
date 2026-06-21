@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""ai-reflect pre-commit 钩子（确定性兜底，v4 审计修复）。
+
+由 install.py 复制到 synced/.git/hooks/pre-commit 并 chmod +x。
+两道硬门：任一命中即阻断提交（exit 1）：
+  1. 密钥/PII：复用 engine.sanitize 规则扫描所有暂存内容。
+  2. git 冲突标记：<<<<<<< / ======= / >>>>>>> 残留（防多设备合并把脏内容提交进画像）。
+注意：引擎自身 commit 绝不加 --no-verify，所以此钩子始终生效。
+"""
+import subprocess
+import sys
+from pathlib import Path
+
+# 钩子被安装到 .git/hooks/ 下；通过环境定位 engine 包
+HOOK_DIR = Path(__file__).resolve().parent
+try:
+    # synced/.git/hooks → 引擎在插件目录，install 时会写一个 .engine_path 指针
+    engine_path = (HOOK_DIR / ".." / ".." / ".engine_path")
+    sys.path.insert(0, Path(engine_path.read_text(encoding="utf-8").strip()).parent.as_posix())
+    from engine.sanitize import scan_and_redact
+except Exception:  # noqa: BLE001 — 钩子要尽量自足，导入失败则只做冲突标记检查
+    scan_and_redact = None
+
+CONFLICT_MARKERS = ("<<<<<<<", "=======", ">>>>>>>")
+
+
+def staged_files():
+    out = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+                         capture_output=True, text=True).stdout
+    return [l for l in out.splitlines() if l.strip()]
+
+
+def main():
+    problems = []
+    for f in staged_files():
+        p = Path(f)
+        if not p.exists():
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for mk in CONFLICT_MARKERS:
+            if any(line.startswith(mk) for line in text.splitlines()):
+                problems.append(f"{f}: 残留 git 冲突标记 {mk}")
+        if scan_and_redact is not None:
+            r = scan_and_redact(text)
+            if not r.clean:
+                kinds = ", ".join(sorted({k for k, _ in r.hits}))
+                problems.append(f"{f}: 疑似敏感信息 [{kinds}]")
+    if problems:
+        sys.stderr.write("ai-reflect pre-commit 阻断提交：\n  " + "\n  ".join(problems) + "\n")
+        sys.exit(1)
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

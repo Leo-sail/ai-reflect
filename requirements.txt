@@ -1,0 +1,3 @@
+# 核心引擎只用标准库（json/sqlite3/glob/pathlib/subprocess），无强制依赖。
+# 可选：
+mcp>=1.0    ; 仅 MCP 跨工具实时读需要（pip install mcp）
