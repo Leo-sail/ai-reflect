@@ -119,19 +119,32 @@ def _read_jsonl(adapter, watermark, max_messages, max_days):
 
 
 def _normalize(obj, fmt):
-    """把不同工具的行归一成 (role, text, ts, session_id)。容错：字段缺失返回 role=None 跳过。"""
-    role = obj.get("role") or (obj.get("message") or {}).get("role")
-    text = obj.get("content") or obj.get("text") or (obj.get("message") or {}).get("content")
-    if isinstance(text, list):  # claude 的 content 可能是 block 数组
-        text = " ".join(b.get("text", "") for b in text if isinstance(b, dict))
-    ts = obj.get("timestamp") or obj.get("time") or obj.get("ts")
+    """把不同工具的行归一成 (role, text, ts, session_id)。容错：字段缺失返回 role=None 跳过。
+    兼容三种常见形态：顶层 role/content；message.role/message.content；payload.role/payload.content
+    （如 Codex rollout：每行 {timestamp, type, payload:{type:'message', role, content:[{type:'input_text',text}]}}）。"""
+    payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+    msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
+    # Codex rollout：只取 payload.type == 'message' 的行，跳过 session_meta/event_msg/turn_context 等
+    if payload and payload.get("type") and payload.get("type") != "message":
+        return None, None, None, ""
+    role = obj.get("role") or msg.get("role") or payload.get("role")
+    text = (obj.get("content") or obj.get("text") or msg.get("content") or payload.get("content"))
+    if isinstance(text, list):  # content 可能是 block 数组（claude / codex）
+        parts = []
+        for b in text:
+            if isinstance(b, dict):
+                parts.append(b.get("text") or b.get("input_text") or b.get("output_text") or "")
+            elif isinstance(b, str):
+                parts.append(b)
+        text = " ".join(p for p in parts if p)
+    ts = obj.get("timestamp") or obj.get("time") or obj.get("ts") or payload.get("timestamp")
     if isinstance(ts, str):
         try:
             from datetime import datetime
             ts = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
         except ValueError:
             ts = None
-    sid = obj.get("session_id") or obj.get("sessionId") or ""
+    sid = obj.get("session_id") or obj.get("sessionId") or payload.get("id") or ""
     return role, (text if isinstance(text, str) else None), ts, sid
 
 
