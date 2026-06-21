@@ -12,7 +12,7 @@ import json
 import sys
 from datetime import datetime, timezone
 
-from . import paths, readers, feedback, heartbeat
+from . import paths, readers, feedback, heartbeat, discover
 
 
 def _build_run_context() -> dict:
@@ -21,6 +21,7 @@ def _build_run_context() -> dict:
     adapters = paths.load_adapters()
     wm = state.get("per_tool_watermark", {})
     empty_streak = state.get("per_tool_empty_streak", {})
+    cap_fp = state.get("per_tool_capabilities", {})  # 各工具上轮的能力指纹
     prev_feedback = {f.get("tool"): f for f in (state.get("runs", [{}])[-1].get("feedback", []) if state.get("runs") else [])}
 
     bundle = {"generated_at": datetime.now(timezone.utc).isoformat(), "tools": [], "prefs": prefs}
@@ -28,6 +29,11 @@ def _build_run_context() -> dict:
         if not tool.get("enabled"):
             continue
         tid = tool["id"]
+        # 每次都侦测该工具的扩展能力变化（新增/更新/移除），只读、不改第三方文件
+        now_caps = discover.scan_capabilities(tool.get("skills_dir"))
+        cap_diff = discover.diff(cap_fp.get(tid, {}), now_caps)
+        cap_fp[tid] = now_caps  # 更新指纹（确定性部分先落）
+
         res = readers.read_tool(tool, wm.get(tid, 0.0),
                                 prefs["max_messages_per_run"], prefs["max_days_per_run"])
         user_msgs = [m for m in res.messages if m.role == "user"]
@@ -37,7 +43,7 @@ def _build_run_context() -> dict:
         if res.status == "parse_error":
             empty_streak[tid] = 0
             bundle["tools"].append({"id": tid, "status": "parse_error", "note": res.note,
-                                    "allow_prune": False})
+                                    "allow_prune": False, "capability_changes": cap_diff})
             continue
         if res.status == "empty":
             empty_streak[tid] = empty_streak.get(tid, 0) + 1
@@ -50,6 +56,7 @@ def _build_run_context() -> dict:
             "message_count": len(res.messages), "user_message_count": len(user_msgs),
             "feedback": sig.__dict__, "allow_prune": allow_prune,
             "global_config": tool.get("global_config"), "skills_dir": tool.get("skills_dir"),
+            "capability_changes": cap_diff,
             # 只把"摘要级"物料给 Skill；正文留在磁盘按需窄查，避免 token 爆炸
         })
     # 暂存物料供 Skill 读取
@@ -60,6 +67,7 @@ def _build_run_context() -> dict:
             wm[t["id"]] = t["new_watermark"]
     state["per_tool_watermark"] = wm
     state["per_tool_empty_streak"] = empty_streak
+    state["per_tool_capabilities"] = cap_fp
     paths.save_json(paths.STATE, state)
     return bundle
 
@@ -72,17 +80,21 @@ def daily() -> int:
     bundle = _build_run_context()
     active = [t for t in bundle["tools"] if t["status"] == "data"]
     drifting = [t["id"] for t in bundle["tools"] if t["status"] == "parse_error"]
-    # 低活跃日：无任何新数据则只记心跳、不烧 token 让 Skill 空转
-    if not active:
+    cap_changed = [t["id"] for t in bundle["tools"] if t.get("capability_changes", {}).get("changed")]
+    # 低活跃日：无新对话。但若侦测到别的插件有能力变化，仍要让 Skill 跑一轮去更新路由
+    if not active and not cap_changed:
         heartbeat.mark_success()
-        note = f"低活跃：无新对话。" + (f" 适配器疑似漂移: {drifting}" if drifting else "")
+        note = "低活跃：无新对话。" + (f" 适配器疑似漂移: {drifting}" if drifting else "")
         sys.stdout.write(note + "\n")
         return 0
-    # 有数据：留下信号，由 Skill（/daily-reflect）读取 run_context.json 完成判断与写入
     heartbeat.mark_success()
+    parts = []
+    if active:
+        parts.append(f"{sum(t['user_message_count'] for t in active)} 条新用户消息")
+    if cap_changed:
+        parts.append(f"侦测到工具能力变化: {cap_changed}（将合并进路由，不覆盖本地）")
     sys.stdout.write(
-        f"本轮物料已就绪：{sum(t['user_message_count'] for t in active)} 条新用户消息，"
-        f"待 daily-reflect Skill 提炼。漂移告警: {drifting or '无'}\n")
+        f"本轮物料已就绪：{'; '.join(parts)}，待 daily-reflect Skill 处理。漂移告警: {drifting or '无'}\n")
     return 0
 
 

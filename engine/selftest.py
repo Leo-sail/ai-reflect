@@ -74,5 +74,26 @@ except ValueError:
 check("is_within ok", P.is_within(P.SYNCED / "a.md", P.SYNCED))
 check("is_within blocks traversal", not P.is_within(P.SYNCED / ".." / "x", P.SYNCED))
 
+# 8. 能力侦测：新增/更新/移除都认得
+from engine import discover
+import os as _os
+sk = Path(tempfile.mkdtemp()) / "skills"
+(sk / "alpha").mkdir(parents=True)
+(sk / "alpha" / "SKILL.md").write_text("---\nname: alpha\nversion: 1.0\ndescription: do A\n---\n", encoding="utf-8")
+caps1 = discover.scan_capabilities(str(sk))
+check("discover finds a skill", any("alpha" in k for k in caps1))
+# 更新 description -> 指纹变 -> updated
+(sk / "alpha" / "SKILL.md").write_text("---\nname: alpha\nversion: 1.1\ndescription: do A better\n---\n", encoding="utf-8")
+caps2 = discover.scan_capabilities(str(sk))
+d = discover.diff(caps1, caps2)
+check("discover detects update", len(d["updated"]) == 1 and d["changed"])
+# 新增一个 -> added
+(sk / "beta").mkdir()
+(sk / "beta" / "SKILL.md").write_text("---\nname: beta\ndescription: do B\n---\n", encoding="utf-8")
+caps3 = discover.scan_capabilities(str(sk))
+check("discover detects add", len(discover.diff(caps2, caps3)["added"]) == 1)
+# 移除 -> removed
+check("discover detects remove", len(discover.diff(caps3, caps2)["removed"]) == 1)
+
 print("\nRESULT:", "ALL PASS" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)
