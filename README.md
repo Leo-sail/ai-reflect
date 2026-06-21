@@ -48,6 +48,12 @@ In one line: **it helps your AI remember you, and helps you get more out of AI o
 
 **You decide the speaking style.** The tone the AI uses with you is set by you and changeable anytime. It will not secretly imitate your way of talking (why not is explained under "Before you use it").
 
+**No text boxes: you pick and edit, never type from scratch.** After every run (including the first), it does not ask you to type a reply. It shows you its draft, you can edit it, and wherever possible the choices are presented as options to pick rather than blanks to fill. Nothing syncs to your files until you confirm.
+
+**Notices when your other tools get updated.** Every run it checks whether your other AI tools' extensions changed (newly installed, upgraded, or removed), not just once a week. When something changed, it folds the new capability into the routing hints so it actually gets used, editing only its own marked block and never touching what you wrote.
+
+**Updates itself without touching your data.** When a new version of ai-reflect is out, it first tells you what is new and what it would add, then updates only the plugin code after you confirm. Your profile, project lessons, preferences, connected tools, and progress are never modified; new settings are filled in only where you never set a value.
+
 ---
 
 ## A few deliberate design choices
@@ -80,34 +86,32 @@ To be clear: ai-reflect did not copy code or text from any of the above. It just
 
 You need Python (version 3.9 or higher). git and mcp are optional; it runs without them, you just lose two abilities (rollback, and letting other tools read the profile live).
 
-```bash
-git clone https://github.com/Leo-sail/ai-reflect.git
-cd ai-reflect
-python engine/install.py
-```
+The smoothest way is as a Claude Code plugin: install it, then run `/reflect-setup`. Setup is presented as choices you pick and a draft you can edit, not a list of blanks to type into:
 
-After you run it, it walks you through, step by step:
+1. Which detected AI tools to connect (off by default; connected only if you choose to).
+2. How the profile syncs across devices: cloud drive, private git remote, or manual export.
+3. How to keep an undo path: git or local backup.
+4. Apply mode: draft (shows changes first, recommended) or direct write.
+5. What time each day it reviews, picked from presets or a custom time.
+6. An initial speaking style from presets, or leave it default.
+7. Optional extra sensitive terms (client names, project codenames) that get replaced when writing the profile and reports.
 
-1. Scans which AI tools are installed on your machine and asks one by one whether to connect each (off by default; connected only if you say yes).
-2. Choose how the profile syncs across devices: cloud drive, private git remote, or manual export.
-3. Choose how to keep an undo path: git or local backup.
-4. Set what time each day it reviews in the background.
-5. Give the AI an initial speaking style, or leave it blank.
-6. Add a few extra sensitive terms (client names, project codenames, things with no pattern that cannot be auto-detected); they get replaced when writing the profile and reports.
+When you confirm, it registers a scheduled task in your OS that runs daily on its own, with no babysitting and no dependency on any app staying open.
 
-When done, it registers a scheduled task in your OS that runs daily on its own, with no babysitting and no dependency on any app staying open.
+Prefer the command line? `python -m engine.install plan` prints the draft setup, and `python -m engine.install apply` applies it after you edit the draft.
 
 ---
 
 ## Daily use
 
-Normally you do nothing; it runs itself each day. In draft mode, what it wants to change goes into a pending folder first, and you merge it after a look. To call it manually, use these commands:
+Normally you do nothing; it runs itself each day. After every run it shows you a draft and lets you pick what to apply, then syncs only after you confirm. To call it manually, use these commands:
 
 ```text
-Review right now            ->  /reflect
-Produce a weekly report     ->  /reflect-report weekly   (also: monthly, 2026, or a custom range)
-Change the AI speaking style ->  /reflect-style be concise, fewer jargon terms
+Review right now             ->  /reflect
+Produce a report             ->  /reflect-report        (pick weekly / monthly / yearly / custom)
+Change the AI speaking style ->  /reflect-style         (pick from presets, or type your own)
 Re-scan your installed tools ->  /reflect-setup
+Update ai-reflect itself     ->  /reflect-update        (shows what is new; never touches your data)
 ```
 
 Done with it: `python engine/uninstall.py`. It removes the scheduled task and asks whether to keep the profile.
@@ -204,6 +208,12 @@ Full terms in [LICENSE](LICENSE).
 
 **说话风格你说了算。** AI 用什么口气跟你聊，是你定的，随时能改。它不会偷偷学你的腔调（为什么不这么做，下面"使用前请知道"里有说明）。
 
+**不用打字：你来挑、来改，不用从头写。** 每次跑完（包含首次）它都不让你在文本框输入，而是把草稿给你看，你能编辑，能做选择的地方尽量给你选项点，而不是留空让你填。确认之前，什么都不会同步到你的文件里。
+
+**别的工具更新了它马上知道。** 每次跑它都查你其他 AI 工具的扩展能力有没有变化（新装的、升级的、删掉的），不是一周才查一次。一旦有变化，它把新能力补进路由提示让它真正被用上，且只改自己那块带标记的内容，绝不动你写的东西。
+
+**自己升级，但不动你的数据。** ai-reflect 出新版时，它先告诉你更新了哪些功能、会新增什么，你确认后才只更新插件代码。你的画像、项目经验、偏好、接入的工具、读取进度，一概不改；新设置只在你从没设过的地方才补上。
+
 ---
 
 ## 几个想清楚了才这么做的选择
@@ -236,34 +246,32 @@ Full terms in [LICENSE](LICENSE).
 
 需要先有 Python（3.9 以上版本）。git 和 mcp 是选装的，没有也能跑，只是少两个能力（回滚和让别的工具实时读档案）。
 
-```bash
-git clone https://github.com/Leo-sail/ai-reflect.git
-cd ai-reflect
-python engine/install.py
-```
+最顺的方式是当作 Claude Code 插件装好，然后跑 `/reflect-setup`。配置是**给你选项点、给草稿改**，不是列一堆空让你填：
 
-运行安装后，它会一步步问你：
+1. 接入哪些已探测到的 AI 工具（默认不接，你选了才接）。
+2. 档案怎么在多台设备间同步：网盘、私有 git 远程、或手动导出。
+3. 怎么留后悔药：git 或本地备份。
+4. 应用模式：草稿（先给你看，推荐）或直接写入。
+5. 每天几点回顾，从预设里挑或自定。
+6. 从预设里挑个初始说话风格，或保持默认。
+7. 可选的额外敏感词（客户名、项目代号），写档案和报告时会替换掉。
 
-1. 扫一遍你电脑上装了哪些 AI 工具，一个个问你要不要接进来（默认不接，你点头才接）。
-2. 选档案怎么在多台设备间同步：网盘、私有云仓、或手动导出。
-3. 选用什么方式留后悔药：git 或本地备份。
-4. 定每天几点在后台回顾。
-5. 给 AI 定个初始说话风格，不想定就留空。
-6. 填几个额外的敏感词（比如客户名、项目代号这种没规律、自动认不出来的），以后写档案和报告时会自动替换掉。
+你确认后，它在系统里挂一个定时任务，每天到点自己跑，不用你管，也不依赖任何软件一直开着。
 
-装完它会在你系统里挂一个定时任务，每天到点自己跑，不用你管，也不依赖任何软件一直开着。
+喜欢命令行？`python -m engine.install plan` 打印草稿配置，编辑好草稿后 `python -m engine.install apply` 落地。
 
 ---
 
 ## 平时怎么用
 
-平时你什么都不用做，它自己每天跑。草稿模式下，它想改的东西会先放进一个待办文件夹，你看过觉得行再合并。想手动叫它，用这几个命令：
+平时你什么都不用做，它自己每天跑。每次跑完它把草稿给你看、让你挑要应用哪些，确认后才同步。想手动叫它，用这几个命令：
 
 ```text
 立刻回顾一次           →  /reflect
-出一份周报              →  /reflect-report 周报   （也能写 月报、2026、或你自定的范围）
-改 AI 的说话风格        →  /reflect-style 说得简洁点，少拽术语
+出一份报告              →  /reflect-report        （挑 周报 / 月报 / 年报 / 自定义）
+改 AI 的说话风格        →  /reflect-style         （从预设里挑，或自己写）
 重新扫描你装的工具      →  /reflect-setup
+升级 ai-reflect 自身    →  /reflect-update        （先告诉你有啥新功能；绝不动你的数据）
 ```
 
 不想用了：`python engine/uninstall.py`，它会撤掉定时任务，并问你档案要不要留着。

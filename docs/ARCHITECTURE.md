@@ -11,8 +11,11 @@ Deterministic layer (Python, must be reliable, no hallucination)
   engine/readers.py    incremental per-tool reads + backlog hard cap + three states + schema self-check
   engine/sanitize.py   deterministic redaction gate (key/PII regex)
   engine/feedback.py   correction-rate signal (denominator correction / churn detection / engagement)
+  engine/discover.py   detect other tools' capability changes each run (added/updated/removed, by fingerprint)
   engine/apply.py      git/backup rollbackable writes + sentinel blocks + pre-write hash
   engine/heartbeat.py  OS-level scheduled heartbeat + self-heal when behind
+  engine/install.py    plan/apply (zero-input): scan -> draft plan -> (edited) -> apply
+  engine/update.py     self-update: code-only, additive migration, never touches user data
   engine/mcp_server.py read-only cross-tool profile exposure
   engine/__main__.py   orchestration: produce run_context.json for the Skill to judge
 Heartbeat (OS level, not parasitic on a GUI)
@@ -61,8 +64,11 @@ Watermarks, device_id, and local paths all live in `local/`, so machine A's prog
   engine/readers.py    各工具增量读取 + 积压硬上限 + 三态 + schema 自检
   engine/sanitize.py   确定性脱敏 gate（密钥/PII 正则）
   engine/feedback.py   纠正率信号（分母校正/流失识别/参与度）
+  engine/discover.py   每轮侦测其他工具能力变化（新增/更新/移除，按指纹比对）
   engine/apply.py      git/备份可回滚写入 + 哨兵区块 + 写前哈希
   engine/heartbeat.py  OS 级定时心跳 + 落后自愈
+  engine/install.py    plan/apply（零输入）：扫描 → 草稿计划 →（编辑后）→ 落地
+  engine/update.py     自升级：只换代码、纯增量迁移、绝不动用户数据
   engine/mcp_server.py 跨工具只读暴露画像
   engine/__main__.py   编排：产出 run_context.json 供 Skill 判断
 心跳（OS 级，不寄生 GUI）
