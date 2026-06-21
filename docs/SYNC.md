@@ -1,4 +1,48 @@
-# 跨设备同步
+# Cross-device sync / 跨设备同步
+
+**English** · [中文](#跨设备同步)
+
+## Principle
+**Knowledge travels with you, bindings are rebuilt per machine.** `synced/` syncs; `local/` (watermark/paths/device_id) never syncs.
+
+## Three methods (chosen at install)
+
+### 1. Private git remote (recommended for technical users)
+```bash
+cd ~/.ai-reflect/synced
+git remote add origin <your private repo>
+git push -u origin main        # the pre-commit hook scans for secrets before push; never --no-verify
+```
+New machine: install plugin -> at `python engine/install.py` choose git_remote and the same repo -> the installer clones `synced/` and rebuilds `local/` via step A.
+Pros: full history, field-level merge. Note: make sure redaction passes before pushing.
+
+### 2. Cloud-drive folder (recommended for non-technical users)
+Put `~/.ai-reflect/synced/` in a OneDrive/iCloud/Dropbox folder (or symlink it). **Do not** put `.git` in the cloud drive (it corrupts); choose backup storage with this method.
+New machine points at the same cloud folder. Pros: zero-effort auto-sync. Cons: weak conflict handling.
+
+### 3. Manual export/import (recommended for privacy-sensitive users)
+```bash
+python engine/export.py   # produces ai-reflect-export.zip with no machine paths
+# on the new machine:
+python engine/import.py ai-reflect-export.zip
+```
+Pros: most private, fully manual, auditable. Cons: you move it by hand.
+
+## Multi-device conflicts
+- Profile entries carry `id+source+confidence+last_confirmed+device`; merge rule: **user_* always beats ai_inferred, same level takes the newer last_confirmed**, real conflicts marked "to verify next reflection," no blind merge.
+- pre-commit scans for `<<<<<<<` conflict markers and blocks committing a dirty merge into the profile.
+- changelog is sharded by device to avoid multi-machine write-write conflicts.
+
+## Across operating systems (Win <-> Mac/Linux)
+- All paths use expanduser, no drive letters; Python uses sys.executable.
+- After switching platforms you **must** run `python engine/install.py` (step A) on the new machine to rebuild adapters.json; the old machine's paths must never be reused directly.
+
+---
+
+<a name="跨设备同步"></a>
+# 跨设备同步（中文）
+
+[English](#cross-device-sync--跨设备同步) · **中文**
 
 ## 原则
 **知识跟你走，绑定按机器重建。** synced/ 同步，local/（水位线/路径/device_id）绝不同步。

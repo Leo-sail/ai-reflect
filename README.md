@@ -2,10 +2,169 @@
 
 # ai-reflect
 
+**Make your AI assistants understand you better the more you use them.**
+
+It quietly reviews your conversations with AI each day, learns who you are,
+how you work, and what pitfalls you have hit, then feeds that understanding
+back into every AI tool you use.
+
+**English** · [中文](#中文)
+
+</div>
+
+---
+
+## Why I built this
+
+After using AI to write and build things for a while, one thing gets more and more annoying:
+
+It does not remember you.
+
+Today you spend half an hour telling it your preferred style, your technical background, the full context of your project. Tomorrow you open a new window and everything resets. You explain it all again. You corrected a bad habit of its last week, and this week it does the same thing. It always meets you as if for the first time.
+
+What I want is simple: an assistant that **grows alongside me**. As I get better, its understanding of me should keep up. The preferences I have stated again and again, it should remember. The pitfalls we walked into together, it should help me avoid next time. Ideally it understands what I need right now better than I do.
+
+Most "memory" solutions out there either dump your entire chat history somewhere, or stand up a heavy database. For someone like me who just wants to use a few tools quietly on their own machine, that is both too heavy and too cold.
+
+So ai-reflect exists. It does not store all your chats. It does something harder: from your real daily conversations, it distills a **small, accurate, and expirable** set of judgments into a little profile you can open and edit anytime. It keeps correcting and trimming itself so the profile never grows bloated. Then it feeds that understanding back to your tools, each in its own format.
+
+In one line: **it helps your AI remember you, and helps you get more out of AI over time.**
+
+— by leochang (leochang210@gmail.com)
+
+---
+
+## What it does for you
+
+**Reviews automatically every day.** Without you asking, it reads your new conversations in the background and gradually figures out how you speak, how you work, your technical depth, and the pace you prefer, recording it into a profile that gets more accurate over time.
+
+**Remembers lessons from projects.** What hard problems you and the AI solved, what detours you took, and how you finally got it working: it saves all of that so similar situations later can reuse it.
+
+**Wakes up neglected features.** You have installed plenty of extensions for your AI tools, and many may never get used. Based on your habits, it reminds the AI in the right places that "this kind of task should use that capability," so they do not sit idle.
+
+**Gets leaner as you go.** As your level rises, the verbose hand-holding meant for beginners should be removed. It automatically deletes the stale, merges the duplicated, and keeps the profile short and accurate.
+
+**Gives you a report on demand.** Just ask, and it produces a report built entirely from **real data**: how often you used it, which features, how much time and cost, what projects you did, what problems came up and how they were solved, and what you and the AI each gained.
+
+**You decide the speaking style.** The tone the AI uses with you is set by you and changeable anytime. It will not secretly imitate your way of talking (why not is explained under "Before you use it").
+
+---
+
+## A few deliberate design choices
+
+Each one exists to dodge a real pitfall.
+
+**Judgment goes to the AI, certainty goes to code.** "What in this conversation is worth keeping" and "is this preference stable" need a brain, so the AI handles them. "Read files, query data, strip secrets, save" must be reliable and never guessed, so plain code handles them.
+
+**It has to know whether it is doing well.** It watches one signal: whether the number of times you correct it goes down over time. But fewer corrections is not always good. You might just be tired of correcting it, or have stopped using it. So it also watches how engaged you still are. When both drop together, it does not congratulate itself; it asks you directly, and never quietly hands itself a reward.
+
+**Before changing your stuff, it shows you first.** By default it does not touch your config directly. It collects what it "plans to change" into a draft, and only applies it once you approve. Once you trust it, you can switch to automatic writes, and every change keeps a backup you can roll back.
+
+**A tool that saves you money must not waste it.** It only reads new conversations each day, with a cap. Even if you have not opened your machine for days and a pile has built up, it digests it in batches rather than blowing up in one run. On days with no new conversations, it just checks in and stops.
+
+---
+
+## Where the inspiration came from
+
+This direction was not something I made up. Several public pieces of research and products all point down the same road:
+
+- In **Stanford's "virtual town" experiment**, the AI characters periodically recall their experiences, distill scattered events into more useful summaries about themselves, and use those summaries to guide later behavior. ai-reflect's "review" learns from this, with one extra step: every review forces it to ask "which of my current judgments about the user is most likely wrong," so it does not drift further off.
+- **The Letta project** made a point: a lot of information is known ahead of time, so rather than thinking it through only when you ask, think it through during idle time. ai-reflect doing its work in the background while you are away is exactly this idea.
+- **Claude itself has a similar mechanism** (extracted by the community from its install package): also reviewing memory during idle time, merging new things, deleting the outdated, and keeping the index clean. It happened to line up with my approach, which is some reassurance the road is right.
+
+To be clear: ai-reflect did not copy code or text from any of the above. It just took the plain idea they all point to and made it into a small thing that runs on your own machine, across several tools, and that you can undo anytime.
+
+---
+
+## How to install
+
+You need Python (version 3.9 or higher). git and mcp are optional; it runs without them, you just lose two abilities (rollback, and letting other tools read the profile live).
+
+```bash
+git clone https://github.com/Leo-sail/ai-reflect.git
+cd ai-reflect
+python engine/install.py
+```
+
+After you run it, it walks you through, step by step:
+
+1. Scans which AI tools are installed on your machine and asks one by one whether to connect each (off by default; connected only if you say yes).
+2. Choose how the profile syncs across devices: cloud drive, private git remote, or manual export.
+3. Choose how to keep an undo path: git or local backup.
+4. Set what time each day it reviews in the background.
+5. Give the AI an initial speaking style, or leave it blank.
+6. Add a few extra sensitive terms (client names, project codenames, things with no pattern that cannot be auto-detected); they get replaced when writing the profile and reports.
+
+When done, it registers a scheduled task in your OS that runs daily on its own, with no babysitting and no dependency on any app staying open.
+
+---
+
+## Daily use
+
+Normally you do nothing; it runs itself each day. In draft mode, what it wants to change goes into a pending folder first, and you merge it after a look. To call it manually, use these commands:
+
+```text
+Review right now            ->  /reflect
+Produce a weekly report     ->  /reflect-report weekly   (also: monthly, 2026, or a custom range)
+Change the AI speaking style ->  /reflect-style be concise, fewer jargon terms
+Re-scan your installed tools ->  /reflect-setup
+```
+
+Done with it: `python engine/uninstall.py`. It removes the scheduled task and asks whether to keep the profile.
+
+---
+
+## Roughly how it runs
+
+Your data lives in two places, which is the key to using it across devices:
+
+- **Travels with you** (syncable to other devices): your profile, project lessons, preference settings.
+- **Bound to this machine** (never synced): local file paths, how far it has read, device id, backups.
+
+When you switch computers, sync the "travels with you" part over, re-scan tools on the new machine, and the old machine's paths will not tag along and cause trouble.
+
+More detail on the internal design, security practices, and sync methods is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SECURITY.md](docs/SECURITY.md), and [docs/SYNC.md](docs/SYNC.md).
+
+**Want to connect Codex, Hermes, Open Claw, or other tools?** Full setup steps and instructions are in [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
+
+Before this was made, I picked it apart in two rounds (one checking whether the logic holds, one checking for security holes); the process and fixes are recorded in [docs/AUDIT.md](docs/AUDIT.md).
+
+---
+
+## Before you use it
+
+- **It can only see conversations on your own machine.** Web chat data lives on someone else's server; the local side cannot reach it, so it is out of scope.
+- **It will not secretly learn your speaking style, on purpose.** If it auto-learned your wording and fed it back, you would be nudged to use those words more, it would then see "you use them even more," learn to imitate harder, and eventually your tones blur together and it cannot tell what was originally yours. Leaving the style for you to set manually means this loop never forms.
+- **Auto-detecting sensitive info is not foolproof.** Keys and passwords with a fixed shape can be caught; things without a pattern (like a client name) cannot, so they rely on the sensitive terms you entered at install. There is also a hard rule: the profile only writes summarized conclusions, never quoting your conversations verbatim.
+- **What goes online cannot be fully deleted.** If some sensitive info slips through and gets pushed to the cloud, deleting the file is not enough; you have to rewrite history specifically.
+- **Syncing via cloud drive means handing the profile to the cloud provider.** If that bothers you, choose private git remote or manual export.
+- **It edits the config files of your other tools.** Everything it writes automatically is wrapped in a clearly visible pair of `<!-- ai-reflect:auto BEGIN/END -->` comments, easy to spot and to delete. It never changes a single word in the body of others' extensions, at most touching a trigger description.
+
+---
+
+## License and attribution
+
+This project is made by **leochang (leochang210@gmail.com)**.
+
+- **Personal, learning, research, and other noncommercial use**: free to use and modify; please keep the attribution.
+- **Commercial use**: requires prior permission from the author at **leochang210@gmail.com**; commercial use without authorization is not permitted.
+
+Full terms in [LICENSE](LICENSE).
+
+---
+---
+
+<div align="center">
+
+<a name="中文"></a>
+# ai-reflect（中文）
+
 **让你的 AI 助手，越用越懂你。**
 
 每天悄悄回顾你和 AI 的对话，记住你是谁、你怎么干活、你踩过哪些坑，
 然后把这份了解喂回给你用的每一个 AI 工具。
+
+[English](#ai-reflect) · **中文**
 
 </div>
 

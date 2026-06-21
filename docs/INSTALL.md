@@ -1,4 +1,47 @@
-# 安装与操作
+# Install and operate / 安装与操作
+
+**English** · [中文](#安装与操作)
+
+> Prerequisites: Python 3.9+; git (optional, for rollback/sync); `pip install mcp` (optional, for cross-tool live read).
+
+## One-step install
+
+```bash
+git clone https://github.com/Leo-sail/ai-reflect.git ai-reflect
+cd ai-reflect
+python engine/install.py          # interactive: scan -> authorize -> sync -> rollback -> time -> style -> heartbeat
+```
+
+What the installer does:
+1. Scans local AI tools (Claude/Codex/Hermes...) and asks one by one to connect (off by default).
+2. Choose sync method, rollback method, daily time, initial speaking style, sensitive terms.
+3. Builds the `~/.ai-reflect/{synced,local}` scaffold, writes adapters.json (local paths).
+4. With storage=git, inits git in `synced/` and installs the pre-commit hook.
+5. Registers an OS-level daily schedule (Windows Task Scheduler or cron) calling `python -m engine daily`.
+
+## As a Claude Code plugin
+
+Place this repo in the Claude Code plugin directory (or via a marketplace) to get four commands: `/reflect` (run now), `/reflect-setup` (re-scan), `/reflect-report` (report), `/reflect-style` (change style), and the ai-reflect-memory MCP server.
+
+## Daily use
+
+- Automatic: runs daily on schedule, no intervention. In `draft` mode changes go to `~/.ai-reflect/local/review/`, effective after you merge.
+- Manual: `/reflect` runs a round now; `/reflect-report weekly` makes a report; `/reflect-style be concise` changes the style.
+
+## Troubleshooting
+
+- **A tool reads nothing (adapter drift)**: daily warns and deletes no config. Run `/reflect-setup` to re-detect that tool's path/format.
+- **Large backlog (not run for a while)**: each round is capped by max_messages/max_days, so it never blows up in one run; it catches up over several rounds.
+- **Drafts piling up**: it backpressures automatically and prompts you to switch to write or handle them.
+- **Redaction slipped into git**: `cd ~/.ai-reflect/synced && git filter-repo --replace-text <rules file>`, then force push.
+- **Pause it**: disable the OS scheduled task; `python engine/uninstall.py` fully uninstalls (can keep `synced/`).
+
+---
+
+<a name="安装与操作"></a>
+# 安装与操作（中文）
+
+[English](#install-and-operate--安装与操作) · **中文**
 
 > 前置：Python 3.9+；git（可选，用于 git 回滚/同步）；`pip install mcp`（可选，用于跨工具 MCP 实时读）。
 

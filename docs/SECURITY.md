@@ -1,4 +1,40 @@
-# 安全与隐私
+# Security and Privacy / 安全与隐私
+
+**English** · [中文](#安全与隐私)
+
+## Layered defenses (deterministic, not relying on the LLM)
+
+1. **Credential-file denylist**: files like `.env`, `auth.json`, key files (`.key/.pem/.pfx/.p12/.jks`), `.npmrc`, `.netrc`, `.pgpass`, `id_*`, and names containing secret/credential/token are excluded at the read stage; their contents never enter the pipeline.
+2. **Redaction gate before any write**: any text written to disk or committed first passes the regex rules in `engine/sanitize.py` (AWS/GitHub/OpenAI/Anthropic/Google/Slack keys, private keys, JWT, Bearer, generic key=value, email, IPv4). On a hit it raises and blocks the write. This gate is wired into every write path, so backup mode does not run naked either.
+3. **pre-commit hook backstop**: `engine/hooks/pre-commit` re-scans for secrets and leftover git conflict markers at commit time; the engine's own commits never add `--no-verify`. The engine also runs the scan in Python before committing, so the hook is a redundant second layer that cannot be bypassed via `core.hooksPath`.
+4. **Whitelist writes to the profile**: the profile only stores abstract conclusions and never quotes conversations verbatim. This is what blocks pattern-less client/project names that regex cannot catch.
+5. **MCP read-only and re-redacted**: the MCP server only exposes the synced profile/retros, re-redacts on return, and never exposes `local/`.
+6. **Path confinement**: writes are refused outside the authorized target whitelist; imports reject zip-slip; MCP `get_retro` only serves exact whitelisted names.
+
+## Honest residual risks
+
+- Regex redaction cannot catch pattern-less sensitive terms (a particular client name). Mitigated by whitelist writes plus the user-entered `sensitive_terms`, but not 100% guaranteed.
+- git history is permanent: if something slips through and was pushed to a remote, you must rewrite history with `git filter-repo`, not just delete the file.
+- Cloud-drive sync hands `synced/` to the cloud provider. Privacy-sensitive users should choose private git remote or manual export.
+- The MCP server uses local stdio and does not listen on a network port, but other local processes could in theory call it. Do not expose it on a shared/multi-user machine.
+- The MCP launch command in `plugin.json` uses `python`, which relies on PATH resolution and is in theory subject to PATH hijacking (especially on Windows). Mitigation: use it in a trusted environment / fixed venv; heartbeat and install already pin the interpreter via `sys.executable`. This is a known residual risk.
+
+## Passing security tests (`engine/selftest.py`)
+
+Redaction catches keys/IP, `assert_clean` blocks, write-path gate wired in, sentinel-forgery blocked, Zip-Slip blocked, MCP path-traversal whitelisted, email regex has no ReDoS, future-timestamp poison dropped, backlog hard cap, churn marked N/A. 18 checks total; all must pass before release.
+
+## User control
+
+- Speaking style is user-specified and changeable anytime; the AI does not auto-imitate (prevents style convergence and treating "sounding like you" as data collection).
+- Content auto-written into tool configs is wrapped in `<!-- ai-reflect:auto BEGIN/END -->`, easy to spot and delete.
+- `apply_mode` defaults to draft: changes go to `review/` for your approval first; switch to write once you trust it.
+
+---
+
+<a name="安全与隐私"></a>
+# 安全与隐私（中文）
+
+[English](#security-and-privacy--安全与隐私) · **中文**
 
 ## 多道防线（确定性，不靠 LLM 自觉）
 

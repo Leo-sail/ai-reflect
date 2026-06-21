@@ -1,4 +1,56 @@
-# 架构
+# Architecture / 架构
+
+**English** · [中文](#架构)
+
+## Layers: judgment vs determinism
+
+```
+Judgment layer (LLM, gets smarter as the model improves)
+  skills/daily-reflect/SKILL.md   distill insights, evolve profile, suggest style, retros
+Deterministic layer (Python, must be reliable, no hallucination)
+  engine/readers.py    incremental per-tool reads + backlog hard cap + three states + schema self-check
+  engine/sanitize.py   deterministic redaction gate (key/PII regex)
+  engine/feedback.py   correction-rate signal (denominator correction / churn detection / engagement)
+  engine/apply.py      git/backup rollbackable writes + sentinel blocks + pre-write hash
+  engine/heartbeat.py  OS-level scheduled heartbeat + self-heal when behind
+  engine/mcp_server.py read-only cross-tool profile exposure
+  engine/__main__.py   orchestration: produce run_context.json for the Skill to judge
+Heartbeat (OS level, not parasitic on a GUI)
+  Windows Task Scheduler / cron -> python -m engine daily
+```
+
+## Storage split (key to cross-device use)
+
+```
+~/.ai-reflect/
+  synced/   travels with you, syncable: profile.md, profile/<domain>.md, retros/, preferences.json, changelog.md
+  local/    bound to this machine, never synced: adapters.json (local paths), state.json (watermark/device_id),
+            backups/, reports/, review/, .heartbeat, run_context.json
+```
+
+Watermarks, device_id, and local paths all live in `local/`, so machine A's progress and dead paths never pollute machine B.
+
+## One run's data flow
+
+1. OS timer -> `python -m engine daily`
+2. engine reads each tool incrementally (window capped by max_messages/max_days), computes the correction signal, three-state judgment, writes `run_context.json`, advances watermarks
+3. Low-activity day stops here (just a heartbeat, no token burn)
+4. With data, the daily-reflect Skill reads run_context -> three-step reflection -> updates profile/retros -> optimizes each tool's config -> evolves and trims
+5. Per apply_mode: draft writes `review/`, or write goes through the redaction gate + git/backup
+6. Writes changelog, marks heartbeat success
+
+## How the loop actually closes (vs the audit)
+
+- **Observation** is not polluted: storage split landed, paths not hardcoded, style echo filtered out.
+- **Application** can physically connect: draft backpressure prompts a switch to write; accumulating successful runs is falsifiable.
+- **Verification** has a real signal: correction-rate with denominator correction + churn marked N/A + engagement cross-check + asking the user on anomaly, instead of auto-rewarding.
+
+---
+
+<a name="架构"></a>
+# 架构（中文）
+
+[English](#architecture--架构) · **中文**
 
 ## 分层：判断 vs 确定性
 

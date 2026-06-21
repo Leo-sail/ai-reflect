@@ -1,4 +1,161 @@
-# 接入其他工具
+# Connecting other tools / 接入其他工具
+
+**English** · [中文](#接入其他工具-中文)
+
+---
+
+ai-reflect is tool-agnostic at its core: it keeps a single understanding of you that any tool can use. An "adapter" tells it **how to read a given tool's conversations** and **which file to write the understanding back to**. Known tools work out of the box; for tools that are not built in, add one entry using the template at the end.
+
+## What an adapter is
+
+One entry per tool, stored on this machine in `~/.ai-reflect/local/adapters.json` (this file is not synced, because it holds machine-local paths). An adapter tells the engine three things:
+
+1. **How to read its conversations** — in what form and where they live: a pile of JSONL files, or a SQLite database.
+2. **Where to write the understanding** — which file this tool reads as its long-term instructions (Claude reads CLAUDE.md, Codex reads AGENTS.md, Hermes reads SOUL.md).
+3. **Where its extensions live** — used to improve skill-routing hints.
+
+The engine only recognizes two forms of conversation storage:
+
+- `claude-jsonl` / `codex-rollout-jsonl`: JSONL files with one message per line, matched by glob paths.
+- `sqlite`: a SQLite database with a `messages` table (at least `role`, `content`, `timestamp` columns).
+
+Most tools store conversations either as JSONL files or in SQLite, so these two cover the vast majority.
+
+## Built in: Claude Code
+
+Auto-detected at `~/.claude` during install.
+
+- Read: `~/.claude/projects/**/*.jsonl` (sub-agent and workflow intermediate files are skipped automatically)
+- Write back: `~/.claude/CLAUDE.md`
+- Extensions dir: `~/.claude/skills`
+
+No manual config; just approve the connection at install.
+
+## Built in: OpenAI Codex
+
+Auto-detected at `~/.codex` during install.
+
+- Read: `~/.codex/sessions/**/*.jsonl` and `~/.codex/archived_sessions/**/*.jsonl`
+- Write back: `~/.codex/AGENTS.md`
+- Extensions dir: `~/.codex/skills`
+
+> Note: Codex session file formats vary slightly across versions. The engine normalizes common fields (role / content / timestamp) automatically. If after some upgrade it reads empty, it warns "suspected format drift" in the log and will **not** delete config just because it read empty. Run `/reflect-setup` to re-detect.
+
+## Built in: Hermes
+
+Auto-detected at `~/.hermes` during install.
+
+- Read: `~/.hermes/state.db` (SQLite, opened read-only, from the `messages` table)
+- Write back: `~/.hermes/SOUL.md`
+- Extensions dir: `~/.hermes/skills`
+
+> Tip: if a directory junction points Hermes data elsewhere on this machine, the adapter follows the junction; nothing special is needed.
+
+## Connecting a tool that is not built in (e.g. Open Claw or any other)
+
+Three steps.
+
+### Step 1: Find where its conversations live
+
+Poke around that tool's data directory (usually under your home directory, like `~/.toolname`). Check:
+
+- Are there a bunch of `.jsonl` files? Open one and see if each line is a message with role / content / time fields.
+- Or is there a `.db` / `.sqlite` file with a table of messages inside?
+
+### Step 2: Add an adapter from the template
+
+Edit `~/.ai-reflect/local/adapters.json` and add an entry to the `tools` array.
+
+For a JSONL-style tool:
+
+```json
+{
+  "id": "openclaw",
+  "display": "Open Claw",
+  "enabled": true,
+  "format": "claude-jsonl",
+  "transcript_globs": ["~/.openclaw/**/*.jsonl"],
+  "transcript_exclude": ["**/cache/**", "**/tmp/**"],
+  "global_config": "~/.openclaw/AGENTS.md",
+  "skills_dir": "~/.openclaw/skills"
+}
+```
+
+For a SQLite-style tool:
+
+```json
+{
+  "id": "sometool",
+  "display": "Some Tool",
+  "enabled": true,
+  "format": "sqlite",
+  "sqlite_db": "~/.sometool/history.db",
+  "global_config": "~/.sometool/INSTRUCTIONS.md",
+  "skills_dir": "~/.sometool/skills"
+}
+```
+
+Field reference:
+
+| Field | Meaning |
+|---|---|
+| `id` | internal unique id, lowercase, e.g. `openclaw` |
+| `display` | display name |
+| `enabled` | must be `true` to be processed |
+| `format` | `claude-jsonl` (JSONL files) or `sqlite` (database) |
+| `transcript_globs` | required for JSONL: glob paths to conversation files, multiple allowed |
+| `transcript_exclude` | optional: paths to skip (cache, temp files) |
+| `sqlite_db` | required for SQLite: path to the database file |
+| `global_config` | which file to write the understanding back to (this tool's long-term instruction file) |
+| `skills_dir` | optional: its extensions directory, used for skill-routing hints |
+
+Use `~` for your home directory in paths; the engine expands it and it works across Windows / Mac / Linux.
+
+### Step 3: Verify it reads
+
+```bash
+python -m engine daily
+```
+
+Check the output. If it reports "tool processed N new messages," it reads fine. If it says "suspected format drift," the field names probably do not match: this tool may use different field names (e.g. `msg` instead of `content`). The engine already handles a set of common field names (role / message.role, content / text / message.content, timestamp / time / ts), covering mainstream tools. If yours uses very unusual names, tell me in an issue, or edit the normalization in `engine/readers.py`.
+
+## Let tools read your profile live (optional, needs MCP)
+
+The above is "write the understanding back to each tool's config file," read when the tool starts. If a tool supports MCP, it can also read your **latest** profile live, without waiting for the next start.
+
+ai-reflect ships a read-only MCP service exposing four things: your profile, the speaking style you set, the list of project lessons, and a single lesson's detail.
+
+In an MCP-capable tool, add this service to its MCP config:
+
+```json
+{
+  "mcpServers": {
+    "ai-reflect-memory": {
+      "command": "python",
+      "args": ["<ai-reflect install path>/engine/mcp_server.py"]
+    }
+  }
+}
+```
+
+(When installed as a plugin in Claude Code, this service is already configured; no need to add it manually.)
+
+The service is read-only and re-redacts before returning, never exposing your machine-local paths, backups, or reports.
+
+## Security boundary (holds for connecting any tool)
+
+- Tools/directories you have not approved are never touched.
+- Files like `.env` and key files are excluded at the read stage; their contents never enter the profile.
+- When writing back to a tool's config, auto content is wrapped in `<!-- ai-reflect:auto BEGIN/END -->` comments, easy to spot and delete; the body of others' extensions is never changed.
+- Only the config files in your authorized list can be written; everything else is refused.
+
+---
+---
+
+<a name="接入其他工具-中文"></a>
+# 接入其他工具（中文）
+
+[English](#connecting-other-tools--接入其他工具) · **中文**
 
 ai-reflect 的核心是工具无关的：它对你的了解只存一份，谁都能用。一个"适配器"负责教它**怎么读某个工具的对话**、**把了解写回哪个文件**。装好已知的工具开箱即用；没内置的工具，照本文末尾的模板加一条即可。
 

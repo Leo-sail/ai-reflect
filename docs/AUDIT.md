@@ -1,4 +1,34 @@
-# 设计审计记录（v3 → v4）
+# Design audit record (v3 -> v4) / 设计审计记录
+
+**English** · [中文](#设计审计记录v3--v4)
+
+Before packaging, the system went through an adversarial audit (4 auditors attacking: feedback loop / security-privacy / cross-device consistency / survivability). Verdict: the v3 design **did not close the loop** (open-loop spinning + multiple positive-feedback contamination paths). v4 fixed each serious finding, recorded here for review.
+
+| # | Audit finding (v3 hole) | v4 fix | Where |
+|---|---|---|---|
+| 1 | Layering was fake: watermark/local paths would sync via git, polluting cross-device "observation" | synced/local physically separated; watermark/paths/device_id only in local/, not in the sync repo | paths.py, install.py |
+| 2 | Style imitation pollutes the single source of truth, positive-feedback convergence | style is now **user-specified, AI only suggests, never auto-changes**; reflection filters out "style echo" evidence | SKILL.md, reflect-style, mcp_server |
+| 3 | Redaction was vaporware (script/hook did not exist) | deterministic redaction gate + real pre-commit hook + credential denylist + profile does not quote originals | sanitize.py, hooks/pre-commit, readers.py |
+| 4 | Correction-rate was a bad signal (all causes read as "success") | denominator correction + churn marked N/A + engagement cross-check + ask the user on anomaly, no auto-reward | feedback.py, SKILL.md |
+| 5 | Heartbeat parasitic on Claude Desktop, silent death | heartbeat moved to OS-level scheduling (schtasks/cron), self-heal when behind | heartbeat.py, install.py |
+| 6 | Backlog uncapped, token explosion after days offline | per-round max_messages/max_days hard cap + batching, watermark only to batch end | readers.py(_window), __main__.py |
+| 7 | Adapter silent failure treated as "user did not use it" -> destructive pruning | three states (data/empty/parse_error) + schema self-check; deletion needs K consecutive empty rounds; no delete on drift | readers.py, __main__.py, SKILL.md |
+| 8 | draft with no merge -> pure spinning, pretending to learn | low-activity day only heartbeats; draft backpressure prompts switch to write; runs accumulate falsifiable success records | __main__.py, SKILL.md |
+
+A second pre-publish security audit then found and fixed runtime vulnerabilities: redaction gate not wired into write paths, Zip-Slip, MCP path traversal, email ReDoS, future-timestamp poisoning, missing target whitelist, sentinel forgery, weak credential denylist, input validation. 18 regression tests now cover these.
+
+## Against confirmation bias
+Step 1 of the three-step reflection **forces a falsification question** ("which profile entry is most likely wrong"); the question stage does not read the full profile to avoid anchoring; source is three-valued and a user's agreement after AI prompting must not be upgraded to "user said."
+
+## Residual limits still honestly kept
+See README's "Before you use it" and SECURITY's "residual risks." This is not a perfect closed loop; it is a **verifiable, rollbackable, self-alarming** one.
+
+---
+
+<a name="设计审计记录v3--v4"></a>
+# 设计审计记录（v3 → v4）（中文）
+
+[English](#design-audit-record-v3---v4--设计审计记录) · **中文**
 
 本系统在打包前经过一轮**对抗性审计**（4 名审计员分别攻击：反馈闭环/安全隐私/跨设备一致性/存活性）。
 结论：v3 方案**不闭环**（开环空转 + 多处正反馈污染）。v4 针对每个严重发现做了修复，记录如下，便于复核。
