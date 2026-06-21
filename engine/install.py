@@ -115,7 +115,7 @@ def apply(plan_obj: dict | None = None) -> dict:
 
     if storage == "git":
         if not (paths.SYNCED / ".git").exists():
-            subprocess.run(["git", "init", "-q"], cwd=str(paths.SYNCED))
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=str(paths.SYNCED))
             subprocess.run(["git", "config", "user.name", "ai-reflect"], cwd=str(paths.SYNCED))
             subprocess.run(["git", "config", "user.email", "ai-reflect@localhost"], cwd=str(paths.SYNCED))
         hooks = paths.SYNCED / ".git" / "hooks"

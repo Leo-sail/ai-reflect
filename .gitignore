@@ -16,3 +16,5 @@ ai-reflect-export.zip
 synced/
 local/
 engine/deploy_local.py
+engine/sync_round1.py
+engine/deploy_local.py

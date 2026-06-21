@@ -1,61 +1,29 @@
-#!/usr/bin/env python3
-"""ai-reflect pre-commit 钩子（确定性兜底，v4 审计修复）。
+#!/bin/sh
+# ai-reflect pre-commit hook (portable, dependency-free).
+# Redundant backstop: the engine's commit_synced() already runs the full Python
+# redaction scan before committing. This hook protects commits made OUTSIDE the
+# engine (manual git commit), using only POSIX shell + grep so it runs anywhere
+# (notably Windows git-bash, where a `python3` shebang hits the broken Store stub).
+# Blocks the commit (exit 1) on: leftover git conflict markers, or obvious secrets.
 
-由 install.py 复制到 synced/.git/hooks/pre-commit 并 chmod +x。
-两道硬门：任一命中即阻断提交（exit 1）：
-  1. 密钥/PII：复用 engine.sanitize 规则扫描所有暂存内容。
-  2. git 冲突标记：<<<<<<< / ======= / >>>>>>> 残留（防多设备合并把脏内容提交进画像）。
-注意：引擎自身 commit 绝不加 --no-verify，所以此钩子始终生效。
-"""
-import subprocess
-import sys
-from pathlib import Path
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
 
-# 钩子在 synced/.git/hooks/。引擎位置从 local/.engine_path 读（不在同步仓内，防篡改）。
-HOOK_DIR = Path(__file__).resolve().parent
-scan_and_redact = None
-try:
-    synced_root = HOOK_DIR.parent.parent            # synced/
-    local_root = synced_root.parent / "local"       # ~/.ai-reflect/local
-    engine_dir = Path((local_root / ".engine_path").read_text(encoding="utf-8").strip())
-    if engine_dir.is_dir() and engine_dir.name == "engine":
-        sys.path.insert(0, str(engine_dir.parent))
-        from engine.sanitize import scan_and_redact
-except Exception as e:  # 导入失败 → 失败关闭：仍执行检查，密钥扫描缺失则保守阻断
-    sys.stderr.write(f"ai-reflect 钩子：脱敏模块加载失败({e})，按安全策略只放行无明显问题的提交。\n")
+problems=""
+for f in $staged; do
+  [ -f "$f" ] || continue
+  # git conflict markers
+  if grep -nE '^(<<<<<<<|=======|>>>>>>>)' "$f" >/dev/null 2>&1; then
+    problems="$problems\n$f: leftover git conflict marker"
+  fi
+  # high-signal secrets (the engine does the comprehensive scan; this catches the obvious)
+  if grep -nE 'AKIA[0-9A-Z]{16}|sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{36,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[0-9A-Za-z-]{10,}' "$f" >/dev/null 2>&1; then
+    problems="$problems\n$f: suspected secret"
+  fi
+done
 
-CONFLICT_MARKERS = ("<<<<<<<", "=======", ">>>>>>>")
-
-
-def staged_files():
-    out = subprocess.run(["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-                         capture_output=True, text=True).stdout
-    return [l for l in out.splitlines() if l.strip()]
-
-
-def main():
-    problems = []
-    for f in staged_files():
-        p = Path(f)
-        if not p.exists():
-            continue
-        try:
-            text = p.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        for mk in CONFLICT_MARKERS:
-            if any(line.startswith(mk) for line in text.splitlines()):
-                problems.append(f"{f}: 残留 git 冲突标记 {mk}")
-        if scan_and_redact is not None:
-            r = scan_and_redact(text)
-            if not r.clean:
-                kinds = ", ".join(sorted({k for k, _ in r.hits}))
-                problems.append(f"{f}: 疑似敏感信息 [{kinds}]")
-    if problems:
-        sys.stderr.write("ai-reflect pre-commit 阻断提交：\n  " + "\n  ".join(problems) + "\n")
-        sys.exit(1)
-    sys.exit(0)
-
-
-if __name__ == "__main__":
-    main()
+if [ -n "$problems" ]; then
+  printf 'ai-reflect pre-commit blocked the commit:%b\n' "$problems" >&2
+  exit 1
+fi
+exit 0
