@@ -1,13 +1,17 @@
-"""一键安装 / 首次配置（模式A）。交互式：扫描整机 AI 工具→征授权→配置→装心跳。
+"""安装 / 首次配置（模式A）—— 两段式、零文本输入。
 
-设计要点（v4 审计修复）：
-- adapters.json 写在 local/（不同步），路径用 expanduser，Python 用 sys.executable，绝不硬编码。
-- state.json / device_id 写在 local/。synced/ 只放 profile/retros/preferences/changelog。
-- git 仓只在 synced/ 初始化；安装真正的 pre-commit 钩子；引擎 commit 绝不 --no-verify。
+设计（v4 + 交互改造）：
+- 不再用 input() 让用户填空。拆成两步，都不阻塞输入：
+    plan()  扫描整机 AI 工具，产出一份草稿计划 ~/.ai-reflect/local/setup-plan.json（含探测到的工具与默认值）。
+    apply() 读取（可能已被用户/命令层编辑过的）setup-plan.json，落地配置、装心跳。
+- 命令层(/reflect-setup)负责：调 plan → 用工具自带的“选择题 UI”让用户挑选/编辑 → 写回 setup-plan.json → 调 apply。
+- 安全不变：adapters/state/device_id 写 local/ 不同步；路径 expanduser；Python 用 sys.executable；
+  git 仓只在 synced/；装真实 pre-commit；.engine_path 放 local/。
 """
 from __future__ import annotations
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -18,7 +22,6 @@ ENGINE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ENGINE_DIR.parent))
 from engine import paths  # noqa: E402
 
-# 已知工具的探测模板（命中即提示用户授权；找不到的工具不接）
 KNOWN_TOOLS = [
     {"id": "claude-code", "display": "Claude Code", "probe": "~/.claude",
      "transcript_globs": ["~/.claude/projects/**/*.jsonl"],
@@ -35,66 +38,64 @@ KNOWN_TOOLS = [
      "global_config": "~/.hermes/SOUL.md", "skills_dir": "~/.hermes/skills"},
 ]
 
-
-def _ask(prompt, default=""):
-    try:
-        r = input(f"{prompt} " + (f"[{default}] " if default else "")).strip()
-    except (EOFError, KeyboardInterrupt):
-        print("\n已取消。")
-        raise SystemExit(1)
-    return r or default
-
-
-def _yes(prompt, default="n"):
-    return _ask(prompt + " (y/n)", default).lower().startswith("y")
+SETUP_PLAN = paths.LOCAL / "setup-plan.json"
 
 
 def scan_tools():
-    found = []
-    for t in KNOWN_TOOLS:
-        if Path(t["probe"]).expanduser().exists():
-            found.append(t)
-    return found
+    return [t for t in KNOWN_TOOLS if Path(t["probe"]).expanduser().exists()]
 
 
-def main():
-    print("=== ai-reflect 首次配置 ===")
-    print(f"系统: {platform.system()}  Python: {sys.executable}\n")
-
-    # 1. 扫描 + 授权
+def plan() -> dict:
+    """扫描并产出草稿计划（不落地、不问问题）。命令层据此出选择题给用户编辑。"""
     found = scan_tools()
-    if not found:
-        print("未发现已知 AI 工具。可稍后手动编辑 adapters.json。")
+    prefs = paths.load_preferences()
+    p = {
+        "detected_tools": [
+            {"id": t["id"], "display": t["display"], "probe": t["probe"],
+             "authorize": False, "_adapter": t}      # authorize 默认 False，由用户在选择题里勾选
+            for t in found
+        ],
+        "sync_mode": prefs.get("sync_mode", "manual"),         # git_remote | cloud_folder | manual
+        "storage_mode": prefs.get("storage_mode", "git"),       # git | backup
+        "apply_mode": prefs.get("apply_mode", "draft"),         # draft | write
+        "daily_time": prefs.get("daily_time", "03:17"),
+        "communication_style": prefs.get("communication_style", ""),
+        "sensitive_terms": prefs.get("sensitive_terms", []),
+        "_choices": {                                           # 供命令层做选择题用的可选项
+            "sync_mode": ["git_remote", "cloud_folder", "manual"],
+            "storage_mode": ["git", "backup"],
+            "apply_mode": ["draft", "write"],
+        },
+        "_note": "命令层把 authorize / 各 *_mode / daily_time / style / sensitive_terms 改好后，调 apply。",
+    }
+    paths.LOCAL.mkdir(parents=True, exist_ok=True)
+    paths.save_json(SETUP_PLAN, p)
+    return p
+
+
+def apply(plan_obj: dict | None = None) -> dict:
+    """读取（已编辑的）setup-plan.json 落地配置、装心跳。零输入。"""
+    if plan_obj is None:
+        plan_obj = paths._read_json(SETUP_PLAN, None)
+    if not plan_obj:
+        raise SystemExit("缺少 setup-plan.json，请先运行 plan。")
+
+    dt = plan_obj.get("daily_time", "03:17")
+    if not re.match(r"^([01]?\d|2[0-3]):[0-5]\d$", dt):
+        raise SystemExit(f"daily_time 非法（应为 HH:MM）：{dt!r}")
+    sync = plan_obj.get("sync_mode", "manual")
+    storage = plan_obj.get("storage_mode", "git")
+    apply_mode = plan_obj.get("apply_mode", "draft")
+    style = plan_obj.get("communication_style", "")
+    terms = plan_obj.get("sensitive_terms", []) or []
+
     authorized = []
-    for t in found:
-        if _yes(f"发现 {t['display']}（{t['probe']}）。授权接入？", default="n"):
-            t = dict(t)
-            t["enabled"] = True
-            authorized.append(t)
+    for t in plan_obj.get("detected_tools", []):
+        if t.get("authorize"):
+            a = dict(t.get("_adapter") or {})
+            a["enabled"] = True
+            authorized.append(a)
 
-    # 2. 同步方式
-    print("\n同步方式：1) git 私有远程  2) 云盘文件夹  3) 手动导出包")
-    sync = {"1": "git_remote", "2": "cloud_folder", "3": "manual"}.get(_ask("选择", "3"), "manual")
-
-    # 3. 回滚方式
-    storage = "git" if _yes("\n用 git 做可回滚？（否则用本地备份文件夹）") else "backup"
-
-    # 4. 每日时间（强校验）
-    import re as _re
-    while True:
-        daily_time = _ask("\n每日反思运行时间 HH:MM", "03:17")
-        if _re.match(r"^([01]?\d|2[0-3]):[0-5]\d$", daily_time):
-            break
-        print("  格式应为 HH:MM（24 小时制），请重输。")
-
-    # 5. 初始沟通风格（用户指定，可留空，随时可改）
-    style = _ask("\n指定 AI 的沟通风格（可留空，之后用 /reflect-style 随时改）", "")
-
-    # 6. 敏感词（客户名/项目名等无正则特征的，用于脱敏 extra_terms）
-    raw_terms = _ask("\n额外敏感词（逗号分隔，写入画像/报告/导出时会被替换；可留空）", "")
-    sensitive_terms = [s.strip() for s in raw_terms.split(",") if s.strip()]
-
-    # --- 落地 scaffold ---
     for d in (paths.SYNCED, paths.LOCAL, paths.RETROS, paths.PROFILE_FACETS, paths.BACKUPS,
               paths.REPORTS, paths.REVIEW):
         d.mkdir(parents=True, exist_ok=True)
@@ -102,9 +103,8 @@ def main():
         shutil.copy2(ENGINE_DIR / "templates" / "profile.md", paths.PROFILE)
 
     prefs = paths.load_preferences()
-    prefs.update({"sync_mode": sync, "storage_mode": storage,
-                  "daily_time": daily_time, "communication_style": style,
-                  "sensitive_terms": sensitive_terms})
+    prefs.update({"sync_mode": sync, "storage_mode": storage, "apply_mode": apply_mode,
+                  "daily_time": dt, "communication_style": style, "sensitive_terms": terms})
     paths.save_json(paths.PREFERENCES, prefs)
 
     state = paths.load_state()
@@ -113,7 +113,6 @@ def main():
     paths.save_json(paths.STATE, state)
     paths.save_json(paths.ADAPTERS, {"tools": authorized})
 
-    # git 仓只在 synced/，装 pre-commit 钩子
     if storage == "git":
         if not (paths.SYNCED / ".git").exists():
             subprocess.run(["git", "init", "-q"], cwd=str(paths.SYNCED))
@@ -122,22 +121,32 @@ def main():
         hooks = paths.SYNCED / ".git" / "hooks"
         hooks.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ENGINE_DIR / "hooks" / "pre-commit", hooks / "pre-commit")
-        # .engine_path 放 local/（绝不进同步仓，防泄露本机路径 + 防篡改致 RCE）
         (paths.LOCAL / ".engine_path").write_text(str(ENGINE_DIR), encoding="utf-8")
         try:
             os.chmod(hooks / "pre-commit", 0o755)
         except OSError:
             pass
 
-    # 心跳：OS 级定时（不依赖任何 GUI）
     from engine import heartbeat
-    entry = f'-m engine'  # 由调度器以 `python -m engine daily` 调用
-    res = heartbeat.install_schedule(daily_time, ENGINE_DIR.parent / "engine")
-    print(f"\n定时心跳: {res}")
-    print("\n配置完成。授权工具:", [t["id"] for t in authorized])
-    print("同步:", sync, " 回滚:", storage, " 时间:", daily_time, " 风格:", style or "(默认)")
-    print("\n提示：首轮会从最近 14 天回看；之后增量。draft 模式下改动先进 review/ 待你合并。")
+    res = heartbeat.install_schedule(dt, ENGINE_DIR.parent / "engine")
+    summary = {"authorized": [t["id"] for t in authorized], "sync": sync, "storage": storage,
+               "apply_mode": apply_mode, "daily_time": dt, "style": style or "(默认)", "schedule": res}
+    print("配置完成 / setup done:", summary)
+    return summary
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else "plan"
+    if cmd == "plan":
+        import json
+        print(json.dumps(plan(), ensure_ascii=False, indent=2))
+        return 0
+    if cmd == "apply":
+        apply()
+        return 0
+    sys.stderr.write("用法: python -m engine.install [plan|apply]\n")
+    return 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main(sys.argv))

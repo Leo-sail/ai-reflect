@@ -6,16 +6,20 @@
 
 ## One-step install
 
+Best done inside Claude Code via `/reflect-setup`, which presents the setup as **multiple-choice questions** (no typing) and applies it after you confirm. Under the hood it is two no-prompt steps you can also run by hand:
+
 ```bash
 git clone https://github.com/Leo-sail/ai-reflect.git ai-reflect
 cd ai-reflect
-python engine/install.py          # interactive: scan -> authorize -> sync -> rollback -> time -> style -> heartbeat
+python -m engine.install plan     # scans tools, writes a draft plan to local/setup-plan.json (asks nothing)
+# review/edit setup-plan.json (the /reflect-setup command does this via a choice UI)
+python -m engine.install apply    # reads the (edited) plan, lands config, installs the heartbeat
 ```
 
-What the installer does:
-1. Scans local AI tools (Claude/Codex/Hermes...) and asks one by one to connect (off by default).
-2. Choose sync method, rollback method, daily time, initial speaking style, sensitive terms.
-3. Builds the `~/.ai-reflect/{synced,local}` scaffold, writes adapters.json (local paths).
+What it does:
+1. `plan` scans local AI tools (Claude/Codex/Hermes...) and drafts the choices (authorize off by default).
+2. You pick, via choices: which tools to authorize, sync method, rollback method, apply mode, daily time, speaking style, sensitive terms.
+3. `apply` builds the `~/.ai-reflect/{synced,local}` scaffold, writes adapters.json (local paths).
 4. With storage=git, inits git in `synced/` and installs the pre-commit hook.
 5. Registers an OS-level daily schedule (Windows Task Scheduler or cron) calling `python -m engine daily`.
 
@@ -47,16 +51,20 @@ Place this repo in the Claude Code plugin directory (or via a marketplace) to ge
 
 ## 一键安装
 
+推荐在 Claude Code 里用 `/reflect-setup`，它把配置做成**选择题**（不打字），你确认后才落地。底层是两步、都不提问，也可手动跑：
+
 ```bash
-git clone <your-private-repo> ai-reflect
+git clone https://github.com/Leo-sail/ai-reflect.git ai-reflect
 cd ai-reflect
-python engine/install.py          # 交互式：扫描→授权→同步→回滚→时间→风格→装心跳
+python -m engine.install plan     # 扫描工具，把草稿计划写到 local/setup-plan.json（全程不提问）
+# 审阅/编辑 setup-plan.json（/reflect-setup 命令用选择 UI 帮你做这步）
+python -m engine.install apply    # 读取（已编辑的）计划，落地配置、装心跳
 ```
 
-安装器做的事：
-1. 扫描本机 AI 工具（Claude/Codex/Hermes…），逐个问你是否授权接入。
-2. 选同步方式、回滚方式、每日时间、初始沟通风格。
-3. 建好 `~/.ai-reflect/{synced,local}` 脚手架，写 adapters.json（本机路径）。
+做的事：
+1. `plan` 扫描本机 AI 工具（Claude/Codex/Hermes…），把选项做成草稿（默认都不授权）。
+2. 你用选择题挑：授权哪些工具、同步方式、回滚方式、应用模式、每日时间、沟通风格、敏感词。
+3. `apply` 建好 `~/.ai-reflect/{synced,local}` 脚手架，写 adapters.json（本机路径）。
 4. storage=git 时在 synced/ 初始化 git 并装 pre-commit 钩子。
 5. 注册 OS 级每日定时（Windows Task Scheduler 或 cron）调 `python -m engine daily`。
 

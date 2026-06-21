@@ -31,6 +31,9 @@ discipline below (from the v4 audit). **Output minimal and accurate; prefer omis
 - `~/.ai-reflect/synced/profile.md` and `profile/<domain>.md`, `retros/`, `synced/preferences.json`.
 - When you need to see conversation originals, **narrow grep** only. Never read whole files, never exhaustively read transcripts (save tokens).
 
+## Interaction rule (every run, including the first)
+**Never ask the user to type modifications or answers into a text box.** Produce your draft and show it directly; let the user edit it; prefer multiple-choice over fill-in; sync to files only after an explicit confirmation. Concretely: write proposed changes to `review/<date>.md`, present them through the tool's question UI as Apply / Edit / Skip choices, offer edits as concrete option pairs (A vs B, keep vs drop), and fall back to free text only when the user explicitly wants to write their own. The final "sync now?" is a yes/no choice, not typed.
+
 ## Three-step reflection (with forced falsification, against confirmation bias)
 1. **Ask first** — looking only at this round's raw conversations (**do NOT read the full profile here, to avoid anchoring**), pose "the 3 highest-value questions about this user." **At least 1 must be falsifying**: "which existing profile entry is most likely wrong / least supported?"
 2. **Then retrieve** — narrow-query the conversations for evidence; for that falsifying question, **actively look for counterexamples**.
@@ -92,6 +95,9 @@ Read each tool's `feedback` signal in run_context:
 - `~/.ai-reflect/local/run_context.json`：本轮物料包（每个工具的状态、新消息计数、纠正率信号、是否允许瘦身）。
 - `~/.ai-reflect/synced/profile.md` 及 `profile/<领域>.md`、`retros/`、`synced/preferences.json`。
 - 需要看对话原文时，**窄范围 grep**，绝不整文件读、绝不穷尽读 transcript（省 token）。
+
+## 交互规则（每轮，含首次）
+**绝不让用户在文本框输入修改或答案。** 产出你的草稿、直接给用户看、让他编辑；尽量做选择题而非填空；确认后才同步到各文件。具体：把拟改动写到 `review/<日期>.md`，用工具的选择 UI 呈现成 应用 / 编辑 / 跳过；编辑项做成具体方案对（A vs B、保留 vs 删除）；只有用户明确想自己写才回退到填空。最后"现在同步吗？"是是/否选择，不是打字。
 
 ## 三步反思（带强制证伪，治确认偏误）
 1. **先提问**——只看本轮原始对话（**此步禁读 profile 全文，防锚定**），提出"关于这个用户最值得回答的 3 个高层问题"。
