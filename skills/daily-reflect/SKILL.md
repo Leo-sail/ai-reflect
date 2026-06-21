@@ -1,6 +1,12 @@
 ---
 name: daily-reflect
 description: |
+  The "judgment layer" of the cross-tool reflection engine (the deterministic pipeline is done by Python in engine/).
+  Reads this round's run_context.json, does a three-step reflection (with forced falsification) to distill a
+  confidence- and source-tagged user profile, accumulates retros, optimizes each tool's behavior config and skill
+  routing per its convention, and evolves/trims to control tokens as the user grows. Speaking style is user-specified;
+  the AI only suggests, never auto-changes it. Triggered by an OS timer, or manually via /reflect, /reflect-setup,
+  /reflect-report, /reflect-style.
   跨工具反思引擎的"判断层"（确定性管道由 engine/ 的 Python 完成）。读取本轮物料包 run_context.json，
   三步反思（含强制证伪）提炼带置信度与来源的用户画像，持续沉淀复盘，按各工具约定优化其行为配置与技能
   路由，随用户成长进化瘦身控 token。沟通风格由用户指定、AI 只建议不自改。由 OS 定时触发，也可手动
@@ -14,7 +20,70 @@ allowed-tools:
   - Bash
 ---
 
-# daily-reflect：跨工具反思（判断层）
+# daily-reflect: cross-tool reflection (judgment layer)
+
+The deterministic grunt work (reading conversations, windowing, scanning for secrets, git) is already done by
+`engine/` (Python). You only do the part that **needs judgment**, and you strictly follow the anti-contamination
+discipline below (from the v4 audit). **Output minimal and accurate; prefer omission over noise, short over long.**
+
+## Input
+- `~/.ai-reflect/local/run_context.json`: this round's materials (each tool's status, new-message count, correction-rate signal, whether pruning is allowed).
+- `~/.ai-reflect/synced/profile.md` and `profile/<domain>.md`, `retros/`, `synced/preferences.json`.
+- When you need to see conversation originals, **narrow grep** only. Never read whole files, never exhaustively read transcripts (save tokens).
+
+## Three-step reflection (with forced falsification, against confirmation bias)
+1. **Ask first** — looking only at this round's raw conversations (**do NOT read the full profile here, to avoid anchoring**), pose "the 3 highest-value questions about this user." **At least 1 must be falsifying**: "which existing profile entry is most likely wrong / least supported?"
+2. **Then retrieve** — narrow-query the conversations for evidence; for that falsifying question, **actively look for counterexamples**.
+3. **Distill insights** — when producing conclusions, attach evidence and a source tag (format below). Only step 3 compares against the old profile values.
+
+## Source and confidence (against the echo chamber, must be strict)
+Each profile conclusion ends with `(source: X · observed N times · last confirmed DATE)`. Source is three-valued:
+- `user_volunteered`: the user said it **spontaneously** (highest trust).
+- `user_confirmed`: you asked, the user confirmed.
+- `ai_inferred`: you inferred it (lowest trust; verify before acting on it).
+
+**Red line**: a user's agreement after the AI prompted them **must not** be upgraded to user_volunteered. On merge conflict, user_* always beats ai_inferred.
+
+## Style-echo detection (against "style polluted by the AI")
+Each user message in run_context carries `prior_assistant_text`. **If a phrasing appeared in the immediately preceding AI reply, do NOT count it as evidence of "the user's language style" this round** (the user may just be echoing you). Language style only takes "what the AI did not say and the user used spontaneously."
+
+## Speaking style (user-specified; you suggest, never auto-change)
+- Follow `preferences.communication_style` when responding.
+- You **may** **suggest** in review, "I noticed you often use short sentences, want me to reply that way too?", but **never auto-write/modify the style**. The style changes only when the user agrees via /reflect-style. This is deliberate, to prevent a style-convergence snowball.
+
+## Update profile and retros
+- **Merge** insights into the right section of profile.md / faceted profile: strengthen what exists (observation count +1, refresh the confirmation date), override on conflict by "user_* beats ai_inferred, same level takes newer," delete when stale.
+- Retros: for each project with real progress, maintain a living doc `retros/<project>.md` (what was done / problems / detours / effective fixes), merge and dedupe.
+- **Before writing**: all text going to disk must pass redaction first (call `python -m engine.sanitize_check`, or go through the engine's assert_clean in Bash); **never quote conversations verbatim**, write evidence in abstract form.
+
+## Optimize each tool's config (per global_config / skills_dir in run_context)
+- Write auto content only between the sentinel comments `<!-- ai-reflect:auto BEGIN/END -->`, for easy recognition and rollback.
+- Add "when to invoke" routing hints for newly installed / idle capabilities.
+- Third-party skill/agent: only when `preferences.touch_third_party_skill_description` is true and it genuinely improves the chance of correct invocation, modify its `description` after backup, **never touch the body/name/tool declarations**.
+
+## Evolve and trim (every time, but gated)
+- **Re-judge technical level**: where the user has grown in a domain, retire the corresponding verbose guidance.
+- **Pruning deletions are gated**: a **deletion** of a tool's config/routing is allowed only when that tool's `allow_prune=true` in run_context (i.e. K consecutive rounds confirmed inactive); when `status=parse_error` (suspected format drift), **delete nothing**.
+- **Control tokens**: against the `preferences.soft_max_lines` soft cap, when over, trim, merge, delete low-value; polish your own old wording.
+
+## Apply (per preferences.apply_mode)
+- `write`: use the engine's apply to write, and per storage keep a git commit / backup + changelog (never --no-verify).
+- `draft`: write proposed changes to `review/<date>.md` (target file / original snippet / suggested new content / reason). **Backpressure**: when unmerged drafts exceed N, stop producing new drafts and switch to a single reminder; dedupe/overwrite same-file proposals across days rather than adding new ones daily.
+
+## Feedback loop (feature A, against the open loop)
+Read each tool's `feedback` signal in run_context:
+- `verdict=suspect_giving_up` or `needs_user_confirmation=true`: **do not congratulate yourself**; write a line in review, "corrections dropped but so did engagement, want to confirm whether I'm actually right or you just don't feel like correcting?" — ask actively, never auto-reward based on it.
+- `verdict=flat` with corrections rising: put "the belief that may have been changed wrongly" on next round's falsification list.
+
+## Security red lines
+- Do not touch unauthorized tools/directories; do not read credential-file values; never change third-party bodies.
+- Pass the redaction gate before any disk write/commit; the profile never quotes originals verbatim.
+- Prefer omission over noise: do not write conclusions without reliable evidence.
+
+---
+---
+
+# daily-reflect：跨工具反思（判断层）（中文）
 
 确定性的脏活（读对话、加窗口、扫密钥、git）已由 `engine/`（Python）做完。你只做**需要判断力**的部分，
 并严格遵守下面针对 v4 审计的防污染纪律。**产出极简、准确，宁缺毋滥、宁短而准。**
@@ -35,6 +104,7 @@ allowed-tools:
 - `user_volunteered`：用户**自发**说的（最高可信）。
 - `user_confirmed`：你问了、用户确认的。
 - `ai_inferred`：你推断的（最低可信；据其行动前要先核实）。
+
 **红线**：AI 主动引导后用户的附和，**不得**升级为 user_volunteered。合并冲突时 user_* 永远压过 ai_inferred。
 
 ## 风格回声检测（治"风格被 AI 污染"）
