@@ -4,9 +4,7 @@ __pycache__/
 *.tmp
 *.log
 
-# 用户数据绝不进插件仓（它们在 ~/.ai-reflect/，与本源码仓无关）
-# 这里仅作提醒：本仓是插件源码，不含任何用户画像/对话/凭证。防呆排除：
-ai-reflect-export.zip
+# 防呆：用户数据/本机状态绝不进插件仓（它们本应在 ~/.ai-reflect/，与本源码仓无关）
 *.db
 *.sqlite
 .heartbeat
@@ -14,4 +12,6 @@ ai-reflect-export.zip
 adapters.json
 state.json
 run_context.json
-preferences.json
+ai-reflect-export.zip
+synced/
+local/

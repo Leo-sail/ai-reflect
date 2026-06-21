@@ -1,5 +1,5 @@
 """导出便携包：把 synced/（画像/复盘/偏好）打成 zip，不含任何本机路径/水位线/凭证。
-偏好里的 storage_mode/sync_mode/daily_time 等本机相关项会被剥离。"""
+偏好里的 storage_mode/sync_mode/daily_time 等本机相关项会被剥离，本机路径会被抹成 [HOME]。"""
 from __future__ import annotations
 import json
 import re
@@ -12,18 +12,16 @@ from engine import paths  # noqa: E402
 from engine.sanitize import scan_and_redact  # noqa: E402
 
 LOCAL_PREF_KEYS = {"storage_mode", "sync_mode", "daily_time"}
-# 把本机绝对路径（含用户名）抹成占位符，防导出包泄露目录结构
-_PATH_SCRUB = [
-    (re.compile(r"(?i)[A-Z]:\\Users\\[^\\/:*?\"<>|\r\n]+"), r"C:\\Users\\<user>"),
-    (re.compile(r"/Users/[^/\s]+"), "/Users/<user>"),
-    (re.compile(r"/home/[^/\s]+"), "/home/<user>"),
+_HOME_PATHS = [
+    re.compile(r"(?i)[A-Z]:\\Users\\[^\\/:*?\"<>|\r\n]+"),
+    re.compile(r"/Users/[^/\s]+"),
+    re.compile(r"/home/[^/\s]+"),
 ]
 
 
-def _scrub(text: str, terms) -> str:
-    text = scan_and_redact(text, terms).text
-    for pat, repl in _PATH_SCRUB:
-        text = pat.sub(repl, text)
+def _scrub_paths(text: str) -> str:
+    for pat in _HOME_PATHS:
+        text = pat.sub("[HOME]", text)
     return text
 
 
@@ -35,13 +33,13 @@ def main():
     terms = paths.load_preferences().get("sensitive_terms", [])
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for f in paths.SYNCED.rglob("*"):
-            if not f.is_file():
+            if ".git" in f.parts or not f.is_file():
                 continue
+            if f.name.startswith("."):   # 排除 .engine_path 等内部点文件
+                continue
+            text = f.read_text(encoding="utf-8", errors="ignore")
+            text = _scrub_paths(scan_and_redact(text, terms).text)
             rel = f.relative_to(paths.SYNCED)
-            # 排除 .git 与任何点开头内部文件（如 .engine_path）
-            if any(part == ".git" or part.startswith(".") for part in rel.parts):
-                continue
-            text = _scrub(f.read_text(encoding="utf-8", errors="ignore"), terms)
             if f.name == "preferences.json":
                 try:
                     d = json.loads(text)
