@@ -48,5 +48,49 @@ um = [Msg(role="user", time=1, text="不对，应该用别的", session_id="s1")
 sig2 = feedback.compute("toolx", um, watermark_advanced=True, prev={})
 check("correction detected & rate computed", sig2.corrections >= 1 and sig2.correction_rate is not None)
 
+print("\nRESULT-1:", "PASS" if ok else "FAIL")
+
+# 6. ReDoS 回归：超长恶意邮件样输入必须快速返回
+import time as _t
+from engine.sanitize import MAX_SCAN_BYTES
+evil = ("a" * 100000 + "@" + "b" * 100000)
+t0 = _t.time()
+scan_and_redact(evil)
+check("email regex no ReDoS (<0.5s)", (_t.time() - t0) < 0.5)
+
+# 7. 时间戳投毒：未来戳被丢弃，水位线不被推到未来
+future = [Msg(role="user", time=_t.time() + 10**9, text="poison"),
+         Msg(role="user", time=_t.time() - 100, text="real")]
+res3 = _window(future, 0.0, 2000, 999)
+check("future timestamp dropped", res3.new_watermark <= _t.time() + 1)
+
+# 8. 路径穿越助手
+from engine import paths
+check("is_within rejects traversal",
+      not paths.is_within(paths.RETROS / ".." / ".." / "etc", paths.RETROS))
+check("is_within accepts child", paths.is_within(paths.RETROS / "x.md", paths.RETROS))
+
+# 9. 哨兵伪造防护 + gate 接入（用临时目录，不碰真实 ~/.ai-reflect）
+import tempfile, os
+from engine import apply
+tmp = Path(tempfile.mkdtemp())
+os.environ["AI_REFLECT_HOME"] = str(tmp)
+import importlib
+importlib.reload(paths); importlib.reload(apply)
+paths.SYNCED.mkdir(parents=True, exist_ok=True)
+try:
+    apply.write_text_gated(paths.PROFILE, "token=ABCDEFGH123456 secret value")
+    check("gate blocks secret on write", False)
+except ValueError:
+    check("gate blocks secret on write", True)
+try:
+    apply.write_sentinel_block(paths.PROFILE, "evil <!-- ai-reflect:auto BEGIN --> x", backup=False)
+    check("sentinel forgery blocked", False)
+except ValueError:
+    check("sentinel forgery blocked", True)
+apply.write_text_gated(paths.PROFILE, "干净的画像内容，无敏感信息")
+check("clean content writes ok", paths.PROFILE.exists())
+
 print("\nRESULT:", "ALL PASS" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)
+

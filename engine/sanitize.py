@@ -24,10 +24,14 @@ _SECRET_PATTERNS = [
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")),
     ("bearer", re.compile(r"\bBearer\s+[A-Za-z0-9._-]{20,}\b")),
     ("generic_assignment", re.compile(
-        r"(?i)\b(?:api[_-]?key|secret|password|passwd|token|access[_-]?key)\b\s*[:=]\s*['\"]?[A-Za-z0-9/_+\-]{12,}")),
-    ("email", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
+        r"(?i)\b(?:api[_-]?key|secret|password|passwd|token|access[_-]?key)\b\s*[:=]\s*"
+        r"(?:['\"][^'\"]{4,}['\"]|[^\s'\"]{6,})")),
+    ("email", re.compile(
+        r"(?i)\b[A-Za-z0-9._%+-]{1,64}@(?:[A-Za-z0-9-]{1,63}\.){1,8}[A-Za-z]{2,24}\b")),
     ("ipv4", re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")),
 ]
+
+MAX_SCAN_BYTES = 2_000_000  # 单次扫描输入上限，防超长恶意文本拖慢/ReDoS 放大
 
 
 @dataclass
@@ -43,6 +47,13 @@ class ScanResult:
 def scan_and_redact(text: str, extra_terms: list | None = None) -> ScanResult:
     """返回脱敏后的文本与命中清单。extra_terms 为用户自录的敏感词（客户名/项目名）。"""
     hits = []
+    if text and len(text) > MAX_SCAN_BYTES:
+        # 超长输入分块扫描，避免单次正则在恶意巨串上放大开销
+        chunks = [text[i:i + MAX_SCAN_BYTES] for i in range(0, len(text), MAX_SCAN_BYTES)]
+        parts = [scan_and_redact(c, extra_terms) for c in chunks]
+        for p in parts:
+            hits.extend(p.hits)
+        return ScanResult(text="".join(p.text for p in parts), hits=hits)
     out = text
     for kind, pat in _SECRET_PATTERNS:
         def _sub(m, _kind=kind):
@@ -51,9 +62,11 @@ def scan_and_redact(text: str, extra_terms: list | None = None) -> ScanResult:
             return f"[REDACTED:{_kind}]"
         out = pat.sub(_sub, out)
     for term in (extra_terms or []):
-        if term and term in out:
-            hits.append(("user_term", term[:2] + "***"))
-            out = out.replace(term, "[REDACTED:user_term]")
+        if term and len(term) >= 3:
+            pat = re.compile(re.escape(term), re.IGNORECASE)
+            if pat.search(out):
+                hits.append(("user_term", term[:2] + "***"))
+                out = pat.sub("[REDACTED:user_term]", out)
     return ScanResult(text=out, hits=hits)
 
 

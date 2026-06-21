@@ -5,12 +5,22 @@
 """
 from __future__ import annotations
 import platform
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import paths
+
+_TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+
+
+def _valid_time(daily_time: str) -> tuple[int, int]:
+    m = _TIME_RE.match(daily_time.strip())
+    if not m:
+        raise ValueError(f"非法时间格式（应为 HH:MM）：{daily_time!r}")
+    return int(m.group(1)), int(m.group(2))
 
 
 def mark_success() -> None:
@@ -34,27 +44,25 @@ def days_behind() -> float | None:
 
 
 def install_schedule(daily_time: str, engine_entry: Path) -> str:
-    """注册 OS 级每日任务。daily_time 形如 'HH:MM'。返回人类可读结果。"""
-    hh, mm = daily_time.split(":")
+    """注册 OS 级每日任务。daily_time 形如 'HH:MM'（强校验）。返回人类可读结果。"""
+    h, mm = _valid_time(daily_time)
     system = platform.system()
     py = sys.executable
     if system == "Windows":
-        # schtasks：独立于 Claude/任何 GUI 存活
         cmd = ["schtasks", "/Create", "/SC", "DAILY", "/TN", "ai-reflect-daily",
-               "/TR", f'"{py}" "{engine_entry}" daily', "/ST", f"{hh}:{mm}", "/F"]
+               "/TR", f'"{py}" "{engine_entry}" daily', "/ST", f"{h:02d}:{mm:02d}", "/F"]
         r = subprocess.run(cmd, capture_output=True, text=True)
         return f"Windows Task Scheduler: {'OK' if r.returncode == 0 else r.stderr}"
-    # macOS / Linux：写一行 crontab
-    cron_line = f"{int(mm)} {int(hh)} * * * {py} {engine_entry} daily\n"
+    cron_line = f"{mm} {h} * * * {py} {engine_entry} daily"
     try:
         existing = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
     except FileNotFoundError:
         return "未找到 crontab，请手动配置定时（见 docs/INSTALL.md）"
     lines = [l for l in existing.splitlines() if "ai-reflect" not in l]
     lines.append("# ai-reflect-daily")
-    lines.append(cron_line.strip())
+    lines.append(cron_line)
     subprocess.run(["crontab", "-"], input="\n".join(lines) + "\n", text=True)
-    return f"cron 已写入：{cron_line.strip()}"
+    return f"cron 已写入：{cron_line}"
 
 
 def remove_schedule() -> str:

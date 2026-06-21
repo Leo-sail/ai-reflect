@@ -20,9 +20,13 @@ from engine.sanitize import scan_and_redact  # noqa: E402
 mcp = FastMCP("ai-reflect-memory")
 
 
+def _terms():
+    return paths.load_preferences().get("sensitive_terms", [])
+
+
 def _safe_read(p) -> str:
     try:
-        return scan_and_redact(p.read_text(encoding="utf-8")).text
+        return scan_and_redact(p.read_text(encoding="utf-8"), _terms()).text
     except FileNotFoundError:
         return ""
 
@@ -52,7 +56,13 @@ def list_retros() -> str:
 @mcp.tool()
 def get_retro(name: str) -> str:
     """读取某个项目复盘全文。"""
+    # 路径穿越防护：只接受 list_retros 暴露的精确白名单 stem
+    valid = {f.stem for f in paths.RETROS.glob("*.md")} if paths.RETROS.exists() else set()
+    if name not in valid:
+        return f"（无此复盘：{name}）"
     f = paths.RETROS / f"{name}.md"
+    if not paths.is_within(f, paths.RETROS):
+        return "（拒绝：路径越界）"
     return _safe_read(f) or f"（无此复盘：{name}）"
 
 

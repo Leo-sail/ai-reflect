@@ -37,12 +37,16 @@ KNOWN_TOOLS = [
 
 
 def _ask(prompt, default=""):
-    r = input(f"{prompt} " + (f"[{default}] " if default else "")).strip()
+    try:
+        r = input(f"{prompt} " + (f"[{default}] " if default else "")).strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n已取消。")
+        raise SystemExit(1)
     return r or default
 
 
-def _yes(prompt):
-    return _ask(prompt + " (y/n)", "y").lower().startswith("y")
+def _yes(prompt, default="n"):
+    return _ask(prompt + " (y/n)", default).lower().startswith("y")
 
 
 def scan_tools():
@@ -63,7 +67,7 @@ def main():
         print("未发现已知 AI 工具。可稍后手动编辑 adapters.json。")
     authorized = []
     for t in found:
-        if _yes(f"发现 {t['display']}（{t['probe']}）。授权接入？"):
+        if _yes(f"发现 {t['display']}（{t['probe']}）。授权接入？", default="n"):
             t = dict(t)
             t["enabled"] = True
             authorized.append(t)
@@ -75,11 +79,20 @@ def main():
     # 3. 回滚方式
     storage = "git" if _yes("\n用 git 做可回滚？（否则用本地备份文件夹）") else "backup"
 
-    # 4. 每日时间
-    daily_time = _ask("\n每日反思运行时间 HH:MM", "03:17")
+    # 4. 每日时间（强校验）
+    import re as _re
+    while True:
+        daily_time = _ask("\n每日反思运行时间 HH:MM", "03:17")
+        if _re.match(r"^([01]?\d|2[0-3]):[0-5]\d$", daily_time):
+            break
+        print("  格式应为 HH:MM（24 小时制），请重输。")
 
     # 5. 初始沟通风格（用户指定，可留空，随时可改）
     style = _ask("\n指定 AI 的沟通风格（可留空，之后用 /reflect-style 随时改）", "")
+
+    # 6. 敏感词（客户名/项目名等无正则特征的，用于脱敏 extra_terms）
+    raw_terms = _ask("\n额外敏感词（逗号分隔，写入画像/报告/导出时会被替换；可留空）", "")
+    sensitive_terms = [s.strip() for s in raw_terms.split(",") if s.strip()]
 
     # --- 落地 scaffold ---
     for d in (paths.SYNCED, paths.LOCAL, paths.RETROS, paths.PROFILE_FACETS, paths.BACKUPS,
@@ -90,7 +103,8 @@ def main():
 
     prefs = paths.load_preferences()
     prefs.update({"sync_mode": sync, "storage_mode": storage,
-                  "daily_time": daily_time, "communication_style": style})
+                  "daily_time": daily_time, "communication_style": style,
+                  "sensitive_terms": sensitive_terms})
     paths.save_json(paths.PREFERENCES, prefs)
 
     state = paths.load_state()
@@ -108,7 +122,8 @@ def main():
         hooks = paths.SYNCED / ".git" / "hooks"
         hooks.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ENGINE_DIR / "hooks" / "pre-commit", hooks / "pre-commit")
-        (paths.SYNCED / ".engine_path").write_text(str(ENGINE_DIR / "__init__.py"), encoding="utf-8")
+        # .engine_path 放 local/（绝不进同步仓，防泄露本机路径 + 防篡改致 RCE）
+        (paths.LOCAL / ".engine_path").write_text(str(ENGINE_DIR), encoding="utf-8")
         try:
             os.chmod(hooks / "pre-commit", 0o755)
         except OSError:

@@ -2,6 +2,7 @@
 偏好里的 storage_mode/sync_mode/daily_time 等本机相关项会被剥离。"""
 from __future__ import annotations
 import json
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -10,8 +11,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from engine import paths  # noqa: E402
 from engine.sanitize import scan_and_redact  # noqa: E402
 
-# 导出时剥离的本机相关偏好（新机重新指定）
 LOCAL_PREF_KEYS = {"storage_mode", "sync_mode", "daily_time"}
+# 把本机绝对路径（含用户名）抹成占位符，防导出包泄露目录结构
+_PATH_SCRUB = [
+    (re.compile(r"(?i)[A-Z]:\\Users\\[^\\/:*?\"<>|\r\n]+"), r"C:\\Users\\<user>"),
+    (re.compile(r"/Users/[^/\s]+"), "/Users/<user>"),
+    (re.compile(r"/home/[^/\s]+"), "/home/<user>"),
+]
+
+
+def _scrub(text: str, terms) -> str:
+    text = scan_and_redact(text, terms).text
+    for pat, repl in _PATH_SCRUB:
+        text = pat.sub(repl, text)
+    return text
 
 
 def main():
@@ -19,14 +32,16 @@ def main():
     if not paths.SYNCED.exists():
         sys.stderr.write("没有 synced/ 可导出。\n")
         return 1
+    terms = paths.load_preferences().get("sensitive_terms", [])
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for f in paths.SYNCED.rglob("*"):
-            if ".git" in f.parts or not f.is_file():
+            if not f.is_file():
                 continue
-            text = f.read_text(encoding="utf-8", errors="ignore")
-            # 纵深防御：导出前再脱敏一次
-            text = scan_and_redact(text).text
             rel = f.relative_to(paths.SYNCED)
+            # 排除 .git 与任何点开头内部文件（如 .engine_path）
+            if any(part == ".git" or part.startswith(".") for part in rel.parts):
+                continue
+            text = _scrub(f.read_text(encoding="utf-8", errors="ignore"), terms)
             if f.name == "preferences.json":
                 try:
                     d = json.loads(text)

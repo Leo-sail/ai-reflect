@@ -80,3 +80,26 @@ def save_json(p: Path, data: dict) -> None:
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(p)  # 原子写，消除夜间并发竞态
+
+
+def is_within(child: Path, parent: Path) -> bool:
+    """child 解析后是否真落在 parent 内（防路径穿越/符号链接逃逸）。"""
+    try:
+        rc = child.resolve()
+        rp = parent.resolve()
+        return rc == rp or rp in rc.parents
+    except OSError:
+        return False
+
+
+def allowed_config_targets() -> list[Path]:
+    """write_sentinel_block 允许写入的目标白名单：当前 enabled 适配器的配置/技能目录 + synced。"""
+    targets = [SYNCED]
+    for t in load_adapters().get("tools", []):
+        if not t.get("enabled"):
+            continue
+        for key in ("global_config", "skills_dir"):
+            v = t.get(key)
+            if v:
+                targets.append(Path(v).expanduser())
+    return targets

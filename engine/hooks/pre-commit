@@ -11,15 +11,18 @@ import subprocess
 import sys
 from pathlib import Path
 
-# 钩子被安装到 .git/hooks/ 下；通过环境定位 engine 包
+# 钩子在 synced/.git/hooks/。引擎位置从 local/.engine_path 读（不在同步仓内，防篡改）。
 HOOK_DIR = Path(__file__).resolve().parent
+scan_and_redact = None
 try:
-    # synced/.git/hooks → 引擎在插件目录，install 时会写一个 .engine_path 指针
-    engine_path = (HOOK_DIR / ".." / ".." / ".engine_path")
-    sys.path.insert(0, Path(engine_path.read_text(encoding="utf-8").strip()).parent.as_posix())
-    from engine.sanitize import scan_and_redact
-except Exception:  # noqa: BLE001 — 钩子要尽量自足，导入失败则只做冲突标记检查
-    scan_and_redact = None
+    synced_root = HOOK_DIR.parent.parent            # synced/
+    local_root = synced_root.parent / "local"       # ~/.ai-reflect/local
+    engine_dir = Path((local_root / ".engine_path").read_text(encoding="utf-8").strip())
+    if engine_dir.is_dir() and engine_dir.name == "engine":
+        sys.path.insert(0, str(engine_dir.parent))
+        from engine.sanitize import scan_and_redact
+except Exception as e:  # 导入失败 → 失败关闭：仍执行检查，密钥扫描缺失则保守阻断
+    sys.stderr.write(f"ai-reflect 钩子：脱敏模块加载失败({e})，按安全策略只放行无明显问题的提交。\n")
 
 CONFLICT_MARKERS = ("<<<<<<<", "=======", ">>>>>>>")
 

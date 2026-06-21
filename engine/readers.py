@@ -9,13 +9,22 @@
 from __future__ import annotations
 import glob
 import json
+import re
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# 凭证文件 denylist：在读取层就排除，正文永不进入管道
-CRED_DENYLIST = {".env", "auth.json", ".npmrc", ".netrc", "id_rsa", "credentials"}
-CRED_SUFFIXES = {".key", ".pem"}
+# 凭证文件 denylist：在读取层就排除，正文永不进入管道（模式匹配，从严）
+_CRED_NAME_RE = re.compile(
+    r"(?i)(^\.env|(^|[._-])(secret|credential|token|password|passwd)|^id_[a-z]+$|"
+    r"^\.npmrc$|^\.netrc$|^\.pgpass$|kubeconfig)")
+CRED_SUFFIXES = {".key", ".pem", ".pfx", ".p12", ".jks"}
+
+# DoS 防护上限
+MAX_FILE_BYTES = 50_000_000
+MAX_LINE_BYTES = 1_000_000
+MAX_TOTAL_LINES = 500_000
 
 
 @dataclass
@@ -37,7 +46,7 @@ class ReadResult:
 
 
 def _is_cred(path: Path) -> bool:
-    return path.name in CRED_DENYLIST or path.suffix in CRED_SUFFIXES
+    return bool(_CRED_NAME_RE.search(path.name)) or path.suffix.lower() in CRED_SUFFIXES or path.name == "auth.json"
 
 
 def _expand(p: str) -> str:
@@ -59,7 +68,7 @@ def read_tool(adapter: dict, watermark: float, max_messages: int, max_days: int)
 
 def _collect_jsonl_rows(adapter):
     excl = adapter.get("transcript_exclude", [])
-    rows = []
+    rows, total = [], 0
     for pat in adapter.get("transcript_globs", []):
         for fp in glob.glob(_expand(pat), recursive=True):
             path = Path(fp)
@@ -67,10 +76,20 @@ def _collect_jsonl_rows(adapter):
                 continue
             if any(Path(fp).match(_expand(e)) for e in excl):
                 continue
-            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-                line = line.strip()
-                if line:
+            try:
+                if path.stat().st_size > MAX_FILE_BYTES:
+                    continue  # 跳过超大文件，避免内存耗尽 DoS
+            except OSError:
+                continue
+            with path.open(encoding="utf-8", errors="ignore") as fh:
+                for line in fh:  # 流式逐行，不全量读入
+                    line = line.strip()
+                    if not line or len(line) > MAX_LINE_BYTES:
+                        continue
                     rows.append(line)
+                    total += 1
+                    if total >= MAX_TOTAL_LINES:
+                        return rows
     return rows
 
 
@@ -78,7 +97,7 @@ def _read_jsonl(adapter, watermark, max_messages, max_days):
     raw = _collect_jsonl_rows(adapter)
     if not raw:
         return ReadResult(status="empty", new_watermark=watermark)
-    msgs, parsed_any = [], False
+    msgs, parsed_any, ts_any = [], False, False
     for line in raw:
         try:
             obj = json.loads(line)
@@ -88,10 +107,14 @@ def _read_jsonl(adapter, watermark, max_messages, max_days):
         if role is None:
             continue
         parsed_any = True
-        if ts is not None and ts > watermark:
-            msgs.append(Msg(role=role, time=ts, text=text or "", session_id=sid or ""))
+        if ts is not None:
+            ts_any = True
+            if ts > watermark:
+                msgs.append(Msg(role=role, time=ts, text=text or "", session_id=sid or ""))
     if not parsed_any:
         return ReadResult(status="parse_error", note="匹配到文件但 0 条可解析，疑似格式漂移")
+    if not ts_any:
+        return ReadResult(status="parse_error", note="可解析但无有效时间戳，疑似戳字段漂移")
     return _window(msgs, watermark, max_messages, max_days)
 
 
@@ -132,12 +155,25 @@ def _read_sqlite(adapter, watermark, max_messages, max_days):
         con.close()
     if not rows:
         return ReadResult(status="empty", new_watermark=watermark)
-    msgs = [Msg(role=r[0], time=float(r[2]), text=r[1] or "", session_id=r[3] or "") for r in rows]
+    msgs = []
+    for r in rows:
+        if r[2] is None:  # NULL 时间戳
+            continue
+        try:
+            msgs.append(Msg(role=r[0], time=float(r[2]), text=r[1] or "", session_id=r[3] or ""))
+        except (TypeError, ValueError):
+            continue
+    if not msgs:
+        return ReadResult(status="parse_error", note="messages 行无有效时间戳，疑似 schema/戳漂移")
     return _window(msgs, watermark, max_messages, max_days)
 
 
 def _window(msgs, watermark, max_messages, max_days):
-    """积压硬上限：单轮最多 max_messages 条或 max_days 天，水位线只推到本批末尾。"""
+    """积压硬上限：单轮最多 max_messages 条或 max_days 天，水位线只推到本批末尾。
+    时间戳投毒防护：丢弃未来戳（> now+宽限），水位线单调且不晚于当前时刻。"""
+    now = time.time()
+    skew = 300  # 容忍 5 分钟时钟偏差
+    msgs = [m for m in msgs if m.time <= now + skew]  # 丢弃未来戳，防投毒永久跳过
     msgs.sort(key=lambda m: m.time)
     if not msgs:
         return ReadResult(status="empty", new_watermark=watermark)
@@ -148,12 +184,11 @@ def _window(msgs, watermark, max_messages, max_days):
             backlog = True
             break
         batch.append(m)
-    # 标注每条的 prior_assistant_text（供风格回声检测）
     last_assistant = ""
     for m in batch:
         if m.role == "user":
             m.prior_assistant_text = last_assistant
         elif m.role == "assistant":
             last_assistant = m.text
-    new_wm = batch[-1].time if batch else watermark
+    new_wm = min(batch[-1].time, now) if batch else watermark
     return ReadResult(status="data", messages=batch, new_watermark=new_wm, backlog_remaining=backlog)
