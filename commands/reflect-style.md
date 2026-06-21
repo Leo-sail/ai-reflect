@@ -1,7 +1,20 @@
 ---
-description: 设置或修改 AI 的沟通风格（由你指定，随时可改；AI 不会自动模仿你）
-argument-hint: "[想要的风格描述，如 简洁直接/少术语/像朋友聊天；留空则查看当前]"
+description: Set or change the AI speaking style (you specify, changeable anytime; the AI never auto-imitates) / 设置或修改 AI 的沟通风格（由你指定，随时可改；AI 不会自动模仿你）
+argument-hint: "[desired style, e.g. concise / fewer jargon / casual; empty = show current · 想要的风格描述，留空则查看当前]"
 ---
+
+**English**
+
+Read/modify the `communication_style` field in `~/.ai-reflect/synced/preferences.json`.
+
+- If `$ARGUMENTS` is empty: show the current style setting.
+- Otherwise: write `$ARGUMENTS` into `communication_style` (this is **explicitly user-specified**, effective immediately) and confirm.
+
+Explain to the user: this deliberately puts the style under your control rather than letting the AI auto-imitate you from conversations, which avoids your styles converging on each other. In reflection the AI at most "suggests" a style, but it only changes when you agree here. Tools read this setting live via the MCP `get_communication_style`.
+
+---
+
+**中文**
 
 读取/修改 `~/.ai-reflect/synced/preferences.json` 的 `communication_style` 字段。
 
