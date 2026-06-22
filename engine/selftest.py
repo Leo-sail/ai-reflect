@@ -95,5 +95,39 @@ check("discover detects add", len(discover.diff(caps2, caps3)["added"]) == 1)
 # 移除 -> removed
 check("discover detects remove", len(discover.diff(caps3, caps2)["removed"]) == 1)
 
+# 9. vscdb-kv reader（Cursor 方言）：用合成 fixture 验证 KV→Msg 归一与只读
+import sqlite3 as _sq
+from engine import readers as _rd
+vdir = Path(tempfile.mkdtemp())
+vdb = vdir / "state.vscdb"
+_con = _sq.connect(str(vdb))
+_con.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)")
+import json as _json, time as _t
+_base = _t.time() - 3600
+_con.execute("INSERT INTO ItemTable VALUES (?,?)",
+             ("composerData:c1", _json.dumps({"createdAt": int(_base * 1000)})))
+_con.execute("INSERT INTO ItemTable VALUES (?,?)",
+             ("bubbleId:c1:b1", _json.dumps({"type": 1, "text": "帮我改个 bug", "createdAt": int((_base+1)*1000)})))
+_con.execute("INSERT INTO ItemTable VALUES (?,?)",
+             ("bubbleId:c1:b2", _json.dumps({"type": 2, "text": "好的，问题在第3行", "createdAt": int((_base+2)*1000)})))
+_con.commit(); _con.close()
+_adapter = {"format": "vscdb-kv", "dialect": "cursor",
+            "vscdb_sources": [{"db_glob": str(vdir / "state.vscdb"), "table": "ItemTable", "key_like": "bubbleId:%"},
+                              {"db_glob": str(vdir / "state.vscdb"), "table": "ItemTable", "key_like": "composerData:%"}]}
+_res = _rd.read_tool(_adapter, 0.0, 2000, 999)
+check("vscdb cursor reads messages", _res.status == "data" and len(_res.messages) == 2)
+check("vscdb maps roles", {m.role for m in _res.messages} == {"user", "assistant"})
+check("vscdb carries text", any("bug" in m.text for m in _res.messages))
+# 增量：水位线在第一条之后，只回第二条
+_res2 = _rd.read_tool(_adapter, _base + 1.5, 2000, 999)
+check("vscdb incremental by watermark", len(_res2.messages) == 1 and _res2.messages[0].role == "assistant")
+# 未验证方言 -> parse_error，不静默当空
+_res3 = _rd.read_tool({"format": "vscdb-kv", "dialect": "trae", "vscdb_sources": []}, 0.0, 2000, 999)
+check("vscdb unknown dialect -> parse_error", _res3.status == "parse_error")
+# 防注入：非法表名被拒（落 parse_error，不崩）
+_res4 = _rd.read_tool({"format": "vscdb-kv", "dialect": "cursor",
+                       "vscdb_sources": [{"db_glob": str(vdir / "state.vscdb"), "table": "Item;DROP", "key_like": "%"}]}, 0.0, 2000, 999)
+check("vscdb rejects bad table name", _res4.status == "parse_error")
+
 print("\nRESULT:", "ALL PASS" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)

@@ -61,6 +61,8 @@ def read_tool(adapter: dict, watermark: float, max_messages: int, max_days: int)
             return _read_jsonl(adapter, cutoff_floor, max_messages, max_days)
         if fmt == "sqlite":
             return _read_sqlite(adapter, cutoff_floor, max_messages, max_days)
+        if fmt == "vscdb-kv":
+            return _read_vscdb(adapter, cutoff_floor, max_messages, max_days)
         return ReadResult(status="parse_error", note=f"未知 format: {fmt}")
     except Exception as e:  # noqa: BLE001 — 任何异常都收敛成 parse_error，绝不静默当空
         return ReadResult(status="parse_error", note=f"{type(e).__name__}: {e}")
@@ -179,6 +181,120 @@ def _read_sqlite(adapter, watermark, max_messages, max_days):
     if not msgs:
         return ReadResult(status="parse_error", note="messages 行无有效时间戳，疑似 schema/戳漂移")
     return _window(msgs, watermark, max_messages, max_days)
+
+
+# ---------------------------------------------------------------------------
+# VS Code 系（Cursor / Copilot / Trae / Windsurf）：state.vscdb 是 KV 表(ItemTable/cursorDiskKV)
+# 塞 JSON blob，不是 messages 关系表。每个工具一个方言映射，把 KV 解析归一到 Msg。
+# 只读打开，绝不写/删 state.vscdb（删 global 库会让 Cursor 卡 Loading Chat）。
+# 任一工具 key 模式/时间戳不确定 → 落 parse_error，绝不静默当 empty。
+# ---------------------------------------------------------------------------
+MAX_VSCDB_ROWS = 50_000  # KV 遍历行数硬上限（vscdb 单库可达数万行），防 DoS
+
+
+def _vscdb_iter(db, table, key_like):
+    """只读遍历一个 vscdb 的 KV 表，产出 (key, value)。表名走标识符白名单，key 参数化，防注入。"""
+    if not Path(db).exists():
+        return
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", table or ""):
+        raise ValueError(f"非法表名: {table!r}")
+    con = sqlite3.connect(f"file:{db}?mode=ro&immutable=1", uri=True)
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+        if not cur.fetchone():
+            raise ValueError(f"表不存在: {table}")
+        if key_like:
+            cur.execute(f"SELECT key, value FROM {table} WHERE key LIKE ? LIMIT ?",
+                        (key_like, MAX_VSCDB_ROWS))
+        else:
+            cur.execute(f"SELECT key, value FROM {table} LIMIT ?", (MAX_VSCDB_ROWS,))
+        for k, v in cur.fetchall():
+            yield k, v
+    finally:
+        con.close()
+
+
+def _coerce_ts(v):
+    """vscdb 时间戳多为毫秒整数或 ISO 串；归一成 unix 秒。认不出返回 None。"""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return v / 1000.0 if v > 1e12 else float(v)  # >1e12 视为毫秒
+    if isinstance(v, str):
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+def _dialect_cursor(rows):
+    """Cursor 方言：bubbleId:<composerId>:<bubbleId> 的 value 为 JSON，type 1=user 2=assistant；
+    composerData:<id> 提供会话级时间，缺戳的 bubble 用其会话时间兜底。"""
+    composer_time, bubbles = {}, []
+    for key, val in rows:
+        if not isinstance(val, str):
+            continue
+        try:
+            obj = json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if key.startswith("composerData:"):
+            cid = key.split(":", 1)[1]
+            t = _coerce_ts(obj.get("createdAt") or obj.get("lastUpdatedAt"))
+            if t:
+                composer_time[cid] = t
+        elif key.startswith("bubbleId:"):
+            parts = key.split(":")
+            cid = parts[1] if len(parts) > 1 else ""
+            role = {1: "user", 2: "assistant"}.get(obj.get("type"))
+            text = obj.get("text") or obj.get("richText") or ""
+            if isinstance(text, dict):
+                text = text.get("text", "")
+            bubbles.append((role, text, _coerce_ts(obj.get("createdAt") or obj.get("timestamp")), cid))
+    msgs = []
+    for role, text, t, cid in bubbles:
+        if role is None:
+            continue
+        if t is None:
+            t = composer_time.get(cid)
+        if t is None:
+            continue
+        msgs.append(Msg(role=role, time=t, text=text or "", session_id=cid))
+    return msgs
+
+
+_VSCDB_DIALECTS = {"cursor": _dialect_cursor}
+
+
+def _read_vscdb(adapter, watermark, max_messages, max_days):
+    dialect = adapter.get("dialect")
+    mapper = _VSCDB_DIALECTS.get(dialect)
+    if mapper is None:
+        # Copilot / Trae 等：框架就绪，但 key 模式须在装有该工具的机器上 dump 确认后才启用，不臆测
+        return ReadResult(status="parse_error",
+                          note=f"vscdb 方言 '{dialect}' 未在本机验证；请在装有该工具的机器 dump ItemTable 后补 mapping")
+    rows, matched_db = [], False
+    for spec in adapter.get("vscdb_sources", []):
+        table = spec.get("table", "ItemTable")
+        key_like = spec.get("key_like")
+        for db in glob.glob(_expand(spec["db_glob"]), recursive=True):
+            matched_db = True
+            for k, v in _vscdb_iter(db, table, key_like):
+                rows.append((k, v))
+    if not matched_db:
+        return ReadResult(status="empty", new_watermark=watermark)  # 没装/没库 = 真实无活动
+    msgs_all = mapper(rows)
+    if not msgs_all and rows:
+        return ReadResult(status="parse_error", note="读到 KV 但无可解析消息，疑似 schema 演进")
+    fresh = [m for m in msgs_all if m.time > watermark]
+    if not fresh:
+        return ReadResult(status="empty", new_watermark=watermark)
+    return _window(fresh, watermark, max_messages, max_days)
 
 
 def _window(msgs, watermark, max_messages, max_days):

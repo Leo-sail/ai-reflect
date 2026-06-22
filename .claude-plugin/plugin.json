@@ -1,6 +1,6 @@
 {
   "name": "ai-reflect",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "跨工具的反思与自进化引擎：观察用户在各 AI 工具的协同，提炼带置信度的用户画像，按各工具约定优化其行为配置，并用纠正率验证学习是否真的有效。闭环、可回滚、确定性脱敏、跨设备同步。",
   "author": { "name": "leochang", "email": "leochang210@gmail.com" },
   "license": "Noncommercial (see LICENSE; commercial use requires permission from leochang210@gmail.com)",

@@ -36,6 +36,31 @@ KNOWN_TOOLS = [
     {"id": "hermes", "display": "Nous Hermes", "probe": "~/.hermes",
      "format": "sqlite", "sqlite_db": "~/.hermes/state.db",
      "global_config": "~/.hermes/SOUL.md", "skills_dir": "~/.hermes/skills"},
+    # --- VS Code 系（state.vscdb 键值表，用 vscdb-kv reader）---
+    {"id": "cursor", "display": "Cursor", "probe": "~/AppData/Roaming/Cursor/User",
+     "format": "vscdb-kv", "dialect": "cursor",
+     "vscdb_sources": [
+         {"db_glob": "~/AppData/Roaming/Cursor/User/workspaceStorage/*/state.vscdb",
+          "table": "ItemTable", "key_like": "bubbleId:%"},
+         {"db_glob": "~/AppData/Roaming/Cursor/User/workspaceStorage/*/state.vscdb",
+          "table": "ItemTable", "key_like": "composerData:%"},
+         {"db_glob": "~/AppData/Roaming/Cursor/User/globalStorage/state.vscdb",
+          "table": "cursorDiskKV", "key_like": "composerData:%"},
+         {"db_glob": "~/AppData/Roaming/Cursor/User/globalStorage/state.vscdb",
+          "table": "cursorDiskKV", "key_like": "bubbleId:%"}],
+     "global_config": "~/.cursor/rules/ai-reflect.mdc", "skills_dir": None,
+     "_note": "Windows 路径已确证；Mac 为 ~/Library/Application Support/Cursor/User，Linux 为 ~/.config/Cursor/User，跨平台时模式A 会按本机重探。"},
+    {"id": "copilot", "display": "VS Code + Copilot Chat", "probe": "~/AppData/Roaming/Code/User",
+     "format": "vscdb-kv", "dialect": "copilot", "_disabled_reason": "正文在 fs 的 chatSessions/<uuid>.{json,jsonl}，需 fs+db 联合 reader；本机未装 Code，key/版本待装机实测",
+     "vscdb_sources": [
+         {"db_glob": "~/AppData/Roaming/Code/User/globalStorage/state.vscdb",
+          "table": "ItemTable", "key_like": "chat.ChatSessionStore.index"}],
+     "global_config": "~/AppData/Roaming/Code/User/prompts/ai-reflect.instructions.md", "skills_dir": None},
+    {"id": "trae", "display": "Trae", "probe": "~/AppData/Roaming/Trae/User",
+     "format": "vscdb-kv", "dialect": "trae", "_disabled_reason": "字节 VS Code fork，state.vscdb 的 key 模式无公开资料，须在装有 Trae 的机器 dump ItemTable 枚举 key 后补 mapping；目录名 Trae / Trae CN 亦待证实",
+     "vscdb_sources": [
+         {"db_glob": "~/AppData/Roaming/Trae/User/workspaceStorage/*/state.vscdb", "table": "ItemTable"}],
+     "global_config": "~/.trae/rules/ai-reflect.md", "skills_dir": None},
 ]
 
 SETUP_PLAN = paths.LOCAL / "setup-plan.json"
@@ -52,7 +77,10 @@ def plan() -> dict:
     p = {
         "detected_tools": [
             {"id": t["id"], "display": t["display"], "probe": t["probe"],
-             "authorize": False, "_adapter": t}      # authorize 默认 False，由用户在选择题里勾选
+             "authorize": False,                       # 默认不接，用户在选择题里勾选
+             "experimental": bool(t.get("_disabled_reason")),
+             "experimental_reason": t.get("_disabled_reason", ""),
+             "_adapter": t}
             for t in found
         ],
         "sync_mode": prefs.get("sync_mode", "manual"),         # git_remote | cloud_folder | manual
@@ -92,7 +120,7 @@ def apply(plan_obj: dict | None = None) -> dict:
     authorized = []
     for t in plan_obj.get("detected_tools", []):
         if t.get("authorize"):
-            a = dict(t.get("_adapter") or {})
+            a = {k: v for k, v in (t.get("_adapter") or {}).items() if not k.startswith("_")}
             a["enabled"] = True
             authorized.append(a)
 

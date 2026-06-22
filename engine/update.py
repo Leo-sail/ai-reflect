@@ -32,6 +32,14 @@ MIGRATIONS = {
         ],
         "new_prefs": {"detect_capability_changes": True},
     },
+    "0.6.0": {
+        "highlights": [
+            "新增 VS Code 系支持：Cursor 已可用（vscdb-kv reader，读 state.vscdb 键值表）",
+            "Copilot / Trae 框架就绪、默认关闭，待在装有该工具的机器上验证 key 后点亮",
+            "声明 Cowork 兼容：同插件格式零改动可用；Cowork 对话数据源暂不接（leveldb 绑账号）",
+        ],
+        "new_prefs": {},
+    },
 }
 
 

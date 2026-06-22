@@ -51,6 +51,22 @@ Auto-detected at `~/.hermes` during install.
 
 > Tip: if a directory junction points Hermes data elsewhere on this machine, the adapter follows the junction; nothing special is needed.
 
+## Built in: VS Code family (Cursor / VS Code + Copilot / Trae / Windsurf)
+
+These editors do not store chat as JSONL or in a `messages` table. They use `state.vscdb`, a SQLite **key-value table** (`ItemTable` / `cursorDiskKV`) holding JSON blobs. So ai-reflect has a third reader format, `vscdb-kv`, with one dialect per tool.
+
+- **Cursor** — supported, Windows path confirmed. Reads `~/AppData/Roaming/Cursor/User/{workspaceStorage/*/state.vscdb, globalStorage/state.vscdb}`, keys `composerData:<id>` and `bubbleId:<composerId>:<bubbleId>` (`type` 1=user, 2=assistant). Writes back to `~/.cursor/rules/ai-reflect.mdc`. The database is opened **read-only and immutable**; ai-reflect never writes or deletes `state.vscdb` (deleting the global one can leave Cursor stuck on "Loading Chat"). On macOS the base is `~/Library/Application Support/Cursor/User`, on Linux `~/.config/Cursor/User`; `/reflect-setup` re-detects per machine.
+- **VS Code + Copilot Chat** — framework ready, **disabled until verified on a machine that has it**. Chat bodies live in the filesystem (`workspaceStorage/<hash>/chatSessions/<uuid>.{json,jsonl}`, versioned), the index in `globalStorage/state.vscdb`. Needs a combined fs+db read; the adapter ships `enabled:false` with a note.
+- **Trae** (ByteDance VS Code fork) — framework ready, **disabled until reverse-engineered**. Same `state.vscdb` family, but its exact key patterns are undocumented; they must be dumped on a machine that has Trae before the dialect mapping can be written. The Windows folder name (`Trae` vs `Trae CN`) is also unconfirmed.
+
+> Why some are disabled rather than guessed: writing a dialect mapping with wrong keys would just read empty, which the engine treats as "suspected format drift" (it warns and deletes nothing), but that helps no one. Honest placeholders beat silent failure. To enable Copilot/Trae, on a machine that has them, dump `state.vscdb`'s `ItemTable` keys and tell us (or add the mapping in `engine/readers.py`).
+
+## Works in Cowork
+
+Cowork is Anthropic's Claude desktop agent mode, and it uses the **same plugin format** as Claude Code (`.claude-plugin/plugin.json` + skills + commands + a local MCP server). So ai-reflect installs and runs in Cowork with no code changes: its commands, the daily-reflect skill, and the read-only memory MCP server all work there. The local MCP server is allowed to run inside Cowork, so the all-local privacy model is preserved.
+
+What ai-reflect does **not** do (yet): use Cowork's own conversations as a reflection data source. Cowork stores conversation content in a Chromium leveldb bound to your claude.ai account, not as local JSONL/SQLite, so it is out of reach of all three readers. This is left for when Anthropic exposes a local export.
+
 ## Connecting a tool that is not built in (e.g. Open Claw or any other)
 
 Three steps.
@@ -203,6 +219,22 @@ ai-reflect 的核心是工具无关的：它对你的了解只存一份，谁都
 - 能力目录：`~/.hermes/skills`
 
 > 提示：本机若用目录联接（junction）把 Hermes 数据指到了别处，适配器跟着联接走即可，无需特殊处理。
+
+## 已内置：VS Code 系（Cursor / VS Code+Copilot / Trae / Windsurf）
+
+这些编辑器不把聊天存成 JSONL、也不用 `messages` 表，而是 `state.vscdb`——一个 SQLite 的**键值表**（`ItemTable` / `cursorDiskKV`），value 塞 JSON 大块。所以 ai-reflect 有第三种 reader：`vscdb-kv`，每个工具一个方言。
+
+- **Cursor** —— 已支持，Windows 路径已确证。读 `~/AppData/Roaming/Cursor/User/{workspaceStorage/*/state.vscdb, globalStorage/state.vscdb}`，key 为 `composerData:<id>` 和 `bubbleId:<会话id>:<气泡id>`（`type` 1=用户、2=助手）。写回 `~/.cursor/rules/ai-reflect.mdc`。数据库**只读且 immutable 方式**打开，ai-reflect 绝不写/删 `state.vscdb`（删 global 那个会让 Cursor 卡在 "Loading Chat"）。macOS 根目录是 `~/Library/Application Support/Cursor/User`，Linux 是 `~/.config/Cursor/User`；`/reflect-setup` 会按本机重探。
+- **VS Code + Copilot Chat** —— 框架就绪，**在装有它的机器上验证前默认关闭**。正文在文件系统（`workspaceStorage/<hash>/chatSessions/<uuid>.{json,jsonl}`，版本化），索引在 `globalStorage/state.vscdb`。需要 fs+db 联合读取；适配器先 `enabled:false` 并带说明。
+- **Trae**（字节的 VS Code fork）—— 框架就绪，**逆向前默认关闭**。同属 `state.vscdb` 一系，但确切 key 模式无公开资料，必须在装了 Trae 的机器上 dump 出来才能写方言映射。Windows 目录名（`Trae` 还是 `Trae CN`）也待证实。
+
+> 为什么有的先关着而不是盲写：用错的 key 写方言只会读到空，引擎会判"疑似格式漂移"（告警、不删任何东西），但那对谁都没用。老实占位胜过静默失效。要点亮 Copilot/Trae，在装有它们的机器上 dump `state.vscdb` 的 `ItemTable` key 告诉我（或自己在 `engine/readers.py` 里补 mapping）。
+
+## 在 Cowork 里可用
+
+Cowork 是 Anthropic Claude 桌面的 agent 模式，用的是和 Claude Code **一样的插件格式**（`.claude-plugin/plugin.json` + skills + commands + 本地 MCP server）。所以 ai-reflect 在 Cowork 里**零改动**就能装能跑：命令、daily-reflect 技能、只读记忆 MCP server 都好使。本地 MCP server 在 Cowork 里被允许运行，纯本地隐私模型不受影响。
+
+ai-reflect **暂时不做**的：把 Cowork 自己的对话当反思数据源。Cowork 的对话内容存在绑定 claude.ai 账号的 Chromium leveldb 里，不是本地 JSONL/SQLite，三种 reader 都够不着。等 Anthropic 提供本地导出再说。
 
 ## 接入一个没内置的工具（比如 Open Claw 或任何其他）
 

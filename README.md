@@ -100,6 +100,8 @@ When you confirm, it registers a scheduled task in your OS that runs daily on it
 
 Prefer the command line? `python -m engine.install plan` prints the draft setup, and `python -m engine.install apply` applies it after you edit the draft.
 
+**Supported tools.** Out of the box: Claude Code, Codex, Hermes, and Cursor. Also runs inside Anthropic's Cowork (same plugin format, no changes). VS Code + Copilot and Trae have their adapters built but turned off until verified on a machine that has them; see [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md). Any other tool can be added by hand in three steps.
+
 ---
 
 ## Daily use
@@ -259,6 +261,8 @@ Full terms in [LICENSE](LICENSE).
 你确认后，它在系统里挂一个定时任务，每天到点自己跑，不用你管，也不依赖任何软件一直开着。
 
 喜欢命令行？`python -m engine.install plan` 打印草稿配置，编辑好草稿后 `python -m engine.install apply` 落地。
+
+**支持哪些工具。** 开箱即用：Claude Code、Codex、Hermes、Cursor。也能在 Anthropic 的 Cowork 里跑（同插件格式、零改动）。VS Code + Copilot 和 Trae 的适配器已经写好但默认关着，要在装有它们的机器上验证后才点亮，见 [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)。其他任何工具都能照三步手动加。
 
 ---
 
