@@ -34,6 +34,18 @@ def _build_run_context() -> dict:
         cap_diff = discover.diff(cap_fp.get(tid, {}), now_caps)
         cap_fp[tid] = now_caps  # 更新指纹（确定性部分先落）
 
+        # 只写回工具（厂商加密库/leveldb/服务端）：绝不尝试读其对话库，只参与写回与能力侦测
+        if tool.get("read_disabled"):
+            bundle["tools"].append({
+                "id": tid, "status": "writeback_only",
+                "note": tool.get("read_disabled_reason", "仅写回，不读对话"),
+                "allow_prune": False, "capability_changes": cap_diff,
+                "global_config": tool.get("global_config"),
+                # scan 模式：Skill 把整个 adapter 交回 engine.apply write-back，引擎自己重扫哨兵定位真实文件
+                "writeback_strategy": tool.get("writeback_strategy"),
+                "writeback_dir": tool.get("writeback_dir")})
+            continue
+
         res = readers.read_tool(tool, wm.get(tid, 0.0),
                                 prefs["max_messages_per_run"], prefs["max_days_per_run"])
         user_msgs = [m for m in res.messages if m.role == "user"]
@@ -56,6 +68,8 @@ def _build_run_context() -> dict:
             "message_count": len(res.messages), "user_message_count": len(user_msgs),
             "feedback": sig.__dict__, "allow_prune": allow_prune,
             "global_config": tool.get("global_config"), "skills_dir": tool.get("skills_dir"),
+            "writeback_strategy": tool.get("writeback_strategy"),
+            "writeback_dir": tool.get("writeback_dir"),
             "capability_changes": cap_diff,
             # 只把"摘要级"物料给 Skill；正文留在磁盘按需窄查，避免 token 爆炸
         })

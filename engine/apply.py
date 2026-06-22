@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -120,3 +121,83 @@ def write_sentinel_block(target: Path, content: str, backup: bool) -> str:
         new = (original.rstrip() + "\n\n" + block + "\n") if original else block + "\n"
     target.write_text(new, encoding="utf-8")
     return note
+
+
+def _scan_dir_for_sentinel(dirp: Path) -> Path | None:
+    """扫目录里所有 .md，返回第一个内容含 SENTINEL_BEGIN 的文件（=我们上次写的，不管它叫什么）。
+    都没有则 None。只读、不改任何文件，读不了的文件跳过。与 detect._scan_dir_for_sentinel 同源逻辑，
+    但在【写回时刻】重新扫，以当下目录实际状态为准（用户可能刚重命名了文件）。"""
+    try:
+        for f in sorted(dirp.glob("*.md")):
+            try:
+                if SENTINEL_BEGIN in f.read_text(encoding="utf-8", errors="ignore"):
+                    return f
+            except OSError:
+                continue
+    except OSError:
+        return None
+    return None
+
+
+def resolve_writeback_target(adapter: dict) -> Path | None:
+    """按 adapter 解析【当下】真实写回文件。绝不臆想路径。
+
+    scan 策略（Trae 系：文件名用户可改、厂商命名规则可能变）：写回时刻重扫 writeback_dir 找哨兵；
+      命中就复用那个文件（不管叫什么），没命中用 global_config 给的新建名。目录不存在 → None。
+    其它（fixed/缺省）：直接用 global_config。
+    返回 None 表示目标不可解析（目录不存在等），调用方应跳过、不写。
+    """
+    gc = adapter.get("global_config")
+    if adapter.get("writeback_strategy") == "scan":
+        wd = adapter.get("writeback_dir")
+        if not wd:
+            return None
+        dirp = Path(wd).expanduser()
+        if not dirp.is_dir():
+            return None  # 目录已不在（用户卸载/改路径）→ 不臆想、不新建到不存在的目录
+        hit = _scan_dir_for_sentinel(dirp)
+        if hit is not None:
+            return hit
+        return Path(gc).expanduser() if gc else dirp / "ai-reflect.md"
+    return Path(gc).expanduser() if gc else None
+
+
+def write_back(adapter: dict, content: str, backup: bool = True) -> dict:
+    """Skill 写回入口：按 adapter 解析真实目标（scan 模式重扫哨兵）后写哨兵区块。
+    返回 {status, target?, note?, reason?}。目标不可解析时 status=skipped，绝不乱写。"""
+    target = resolve_writeback_target(adapter)
+    if target is None:
+        return {"status": "skipped",
+                "reason": "写回目标不可解析（目录不存在或未确认），跳过，不臆想路径"}
+    note = write_sentinel_block(target, content, backup)
+    return {"status": "written", "target": str(target), "note": note}
+
+
+def main(argv):
+    """CLI：echo '{"adapter":{...},"content":"...","backup":true}' | python -m engine.apply write-back
+    供 Skill 确定性写回——引擎自己按 adapter 解析真实目标（scan 模式重扫哨兵），不让 LLM 拼路径。
+    退出码 0=已写 / 已安全跳过；1=出错或被安全门拒。"""
+    import json as _json
+    cmd = argv[1] if len(argv) > 1 else ""
+    if cmd != "write-back":
+        sys.stderr.write("用法: echo '<json>' | python -m engine.apply write-back\n")
+        return 2
+    try:
+        payload = _json.loads(sys.stdin.read())
+        adapter = payload["adapter"]
+        content = payload["content"]
+        backup = payload.get("backup", True)
+    except (ValueError, KeyError) as e:
+        sys.stderr.write(f"载荷解析失败（需 JSON: adapter/content[/backup]）：{e}\n")
+        return 1
+    try:
+        result = write_back(adapter, content, backup)
+    except ValueError as e:  # 安全门拒绝（越界/伪造哨兵/命中密钥）
+        sys.stdout.write(_json.dumps({"status": "rejected", "reason": str(e)}, ensure_ascii=False) + "\n")
+        return 1
+    sys.stdout.write(_json.dumps(result, ensure_ascii=False) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

@@ -93,12 +93,16 @@ def is_within(child: Path, parent: Path) -> bool:
 
 
 def allowed_config_targets() -> list[Path]:
-    """write_sentinel_block 允许写入的目标白名单：当前 enabled 适配器的配置/技能目录 + synced。"""
+    """write_sentinel_block 允许写入的目标白名单：当前 enabled 适配器的配置/技能目录 + synced。
+
+    scan 策略的写回工具（如 Trae）文件名用户可改，写回前要重扫目录找哨兵复用真实文件，
+    复用到的文件名≠global_config，故把其 writeback_dir 整目录纳入白名单（与 skills_dir 同理）。
+    """
     targets = [SYNCED]
     for t in load_adapters().get("tools", []):
         if not t.get("enabled"):
             continue
-        for key in ("global_config", "skills_dir"):
+        for key in ("global_config", "skills_dir", "writeback_dir"):
             v = t.get(key)
             if v:
                 targets.append(Path(v).expanduser())

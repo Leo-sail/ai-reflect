@@ -22,52 +22,32 @@ ENGINE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ENGINE_DIR.parent))
 from engine import paths  # noqa: E402
 
-KNOWN_TOOLS = [
-    {"id": "claude-code", "display": "Claude Code", "probe": "~/.claude",
-     "transcript_globs": ["~/.claude/projects/**/*.jsonl"],
-     "transcript_exclude": ["**/subagents/**", "**/workflows/**", "**/tool-results/**", "**/sessions/**"],
-     "format": "claude-jsonl", "global_config": "~/.claude/CLAUDE.md",
-     "skills_dir": "~/.claude/skills"},
-    {"id": "codex", "display": "OpenAI Codex", "probe": "~/.codex",
-     "transcript_globs": ["~/.codex/sessions/**/*.jsonl", "~/.codex/archived_sessions/**/*.jsonl"],
-     "transcript_exclude": ["**/plugins/**", "**/.tmp/**"],
-     "format": "codex-rollout-jsonl", "global_config": "~/.codex/AGENTS.md",
-     "skills_dir": "~/.codex/skills"},
-    {"id": "hermes", "display": "Nous Hermes", "probe": "~/.hermes",
-     "format": "sqlite", "sqlite_db": "~/.hermes/state.db",
-     "global_config": "~/.hermes/SOUL.md", "skills_dir": "~/.hermes/skills"},
-    # --- VS Code 系（state.vscdb 键值表，用 vscdb-kv reader）---
-    {"id": "cursor", "display": "Cursor", "probe": "~/AppData/Roaming/Cursor/User",
-     "format": "vscdb-kv", "dialect": "cursor",
-     "vscdb_sources": [
-         {"db_glob": "~/AppData/Roaming/Cursor/User/workspaceStorage/*/state.vscdb",
-          "table": "ItemTable", "key_like": "bubbleId:%"},
-         {"db_glob": "~/AppData/Roaming/Cursor/User/workspaceStorage/*/state.vscdb",
-          "table": "ItemTable", "key_like": "composerData:%"},
-         {"db_glob": "~/AppData/Roaming/Cursor/User/globalStorage/state.vscdb",
-          "table": "cursorDiskKV", "key_like": "composerData:%"},
-         {"db_glob": "~/AppData/Roaming/Cursor/User/globalStorage/state.vscdb",
-          "table": "cursorDiskKV", "key_like": "bubbleId:%"}],
-     "global_config": "~/.cursor/rules/ai-reflect.mdc", "skills_dir": None,
-     "_note": "Windows 路径已确证；Mac 为 ~/Library/Application Support/Cursor/User，Linux 为 ~/.config/Cursor/User，跨平台时模式A 会按本机重探。"},
-    {"id": "copilot", "display": "VS Code + Copilot Chat", "probe": "~/AppData/Roaming/Code/User",
-     "format": "vscdb-kv", "dialect": "copilot", "_disabled_reason": "正文在 fs 的 chatSessions/<uuid>.{json,jsonl}，需 fs+db 联合 reader；本机未装 Code，key/版本待装机实测",
-     "vscdb_sources": [
-         {"db_glob": "~/AppData/Roaming/Code/User/globalStorage/state.vscdb",
-          "table": "ItemTable", "key_like": "chat.ChatSessionStore.index"}],
-     "global_config": "~/AppData/Roaming/Code/User/prompts/ai-reflect.instructions.md", "skills_dir": None},
-    {"id": "trae", "display": "Trae", "probe": "~/AppData/Roaming/Trae/User",
-     "format": "vscdb-kv", "dialect": "trae", "_disabled_reason": "字节 VS Code fork，state.vscdb 的 key 模式无公开资料，须在装有 Trae 的机器 dump ItemTable 枚举 key 后补 mapping；目录名 Trae / Trae CN 亦待证实",
-     "vscdb_sources": [
-         {"db_glob": "~/AppData/Roaming/Trae/User/workspaceStorage/*/state.vscdb", "table": "ItemTable"}],
-     "global_config": "~/.trae/rules/ai-reflect.md", "skills_dir": None},
-]
-
 SETUP_PLAN = paths.LOCAL / "setup-plan.json"
 
 
 def scan_tools():
-    return [t for t in KNOWN_TOOLS if Path(t["probe"]).expanduser().exists()]
+    """运行时自动发现：在本机实测分类，不依赖写死路径。返回 detect() 的结果。"""
+    from engine import detect
+    return detect.detect()
+
+
+def _plan_tool_entry(t: dict) -> dict:
+    """把 detect() 的一条结果转成草稿计划里的工具项。
+    - readable：默认建议授权（读+写回）。
+    - writeback：默认建议授权但仅写回；target_unconfirmed 时写回目标待用户指认，apply 不会乱写。
+    - unknown：默认不授权，标注待用户决定。
+    """
+    klass = t.get("klass", "unknown")
+    return {
+        "id": t["id"], "display": t["display"], "klass": klass,
+        # 默认授权策略：能读的和能确定写回目标的默认勾选；unknown / 目标未确认的默认不勾
+        "authorize": klass == "readable" or (klass == "writeback" and not t.get("target_unconfirmed")),
+        "writeback_only": klass == "writeback",
+        "target_unconfirmed": bool(t.get("target_unconfirmed")),
+        "global_config": t.get("global_config"),
+        "reason": t.get("reason", ""),
+        "_adapter": t,
+    }
 
 
 def plan() -> dict:
@@ -75,14 +55,7 @@ def plan() -> dict:
     found = scan_tools()
     prefs = paths.load_preferences()
     p = {
-        "detected_tools": [
-            {"id": t["id"], "display": t["display"], "probe": t["probe"],
-             "authorize": False,                       # 默认不接，用户在选择题里勾选
-             "experimental": bool(t.get("_disabled_reason")),
-             "experimental_reason": t.get("_disabled_reason", ""),
-             "_adapter": t}
-            for t in found
-        ],
+        "detected_tools": [_plan_tool_entry(t) for t in found],
         "sync_mode": prefs.get("sync_mode", "manual"),         # git_remote | cloud_folder | manual
         "storage_mode": prefs.get("storage_mode", "git"),       # git | backup
         "apply_mode": prefs.get("apply_mode", "draft"),         # draft | write
@@ -118,11 +91,52 @@ def apply(plan_obj: dict | None = None) -> dict:
     terms = plan_obj.get("sensitive_terms", []) or []
 
     authorized = []
+    skipped = []
     for t in plan_obj.get("detected_tools", []):
-        if t.get("authorize"):
-            a = {k: v for k, v in (t.get("_adapter") or {}).items() if not k.startswith("_")}
-            a["enabled"] = True
-            authorized.append(a)
+        if not t.get("authorize"):
+            continue
+        adapter = t.get("_adapter") or {}
+        klass = adapter.get("klass") or t.get("klass", "unknown")
+        # 写回目标可由命令层在确认后写到草稿项顶层 global_config；顶层优先，其次 _adapter。
+        effective_gc = t.get("global_config") or adapter.get("global_config")
+        # 写回目标仍未确认的 writeback 工具：不落地（绝不往臆想路径写），记到 skipped 让命令层提示用户指认
+        if klass == "writeback" and not effective_gc:
+            skipped.append({"id": t["id"], "display": t["display"],
+                            "reason": "写回目标未确认，待用户在 Trae/工具界面指认规则文件后再启用"})
+            continue
+        # 用户手贴的明文导出绕过了 detect 的实测分级，落地前必须自己再验一遍：
+        # format=sqlite 的 readable 工具，复用 detect 的实测（明文魔数 + messages schema），
+        # 验不过就降级——有写回目标退回 writeback，否则整条跳过。绝不凭文档承诺信任未验证的 readable。
+        if klass == "readable" and adapter.get("format") == "sqlite":
+            from engine import detect as _detect
+            db = Path(adapter["sqlite_db"]).expanduser() if adapter.get("sqlite_db") else None
+            plain = _detect._sqlite_is_plain(db) if db and db.exists() else None
+            has_msgs = _detect._sqlite_has_messages_table(db) if plain is True else False
+            if not (plain is True and has_msgs):
+                why = ("导出文件不存在" if not (db and db.exists())
+                       else "导出非明文 SQLite（魔数不符）" if plain is not True
+                       else "导出缺 messages 表/列，schema 不符")
+                if effective_gc:
+                    klass = "writeback"  # 退回只写回：读不了导出，但还能写回画像
+                    adapter = {**adapter, "reason": f"明文导出校验未过（{why}），退回只写回"}
+                else:
+                    skipped.append({"id": t["id"], "display": t["display"],
+                                    "reason": f"明文导出校验未过（{why}），且无写回目标，跳过"})
+                    continue
+        a = {k: v for k, v in adapter.items() if not k.startswith("_")}
+        a["enabled"] = True
+        a["klass"] = klass
+        if effective_gc:
+            a["global_config"] = effective_gc  # 采纳用户确认/探测到的真实写回目标
+        if klass == "writeback":
+            # 只写回：明确标记不读对话，reader 不会尝试打开它的库
+            a["read_disabled"] = True
+            a["read_disabled_reason"] = adapter.get("reason", "厂商加密/不可本地读取，按合规只写回")
+            # 清掉读取相关字段：降级自 readable 时会残留 sqlite_db/format 等，留着误导且不干净。
+            # writeback 只认 global_config / writeback_dir / writeback_strategy，读取字段一律剥掉。
+            for k in ("sqlite_db", "format", "vscdb_sources", "transcript_globs", "transcript_exclude"):
+                a.pop(k, None)
+        authorized.append(a)
 
     for d in (paths.SYNCED, paths.LOCAL, paths.RETROS, paths.PROFILE_FACETS, paths.BACKUPS,
               paths.REPORTS, paths.REVIEW):
@@ -158,7 +172,9 @@ def apply(plan_obj: dict | None = None) -> dict:
     from engine import heartbeat
     res = heartbeat.install_schedule(dt, ENGINE_DIR.parent / "engine")
     summary = {"authorized": [t["id"] for t in authorized], "sync": sync, "storage": storage,
-               "apply_mode": apply_mode, "daily_time": dt, "style": style or "(默认)", "schedule": res}
+               "apply_mode": apply_mode, "daily_time": dt, "style": style or "(默认)", "schedule": res,
+               "skipped_unconfirmed": skipped,
+               "readonly_writeback": [t["id"] for t in authorized if t.get("read_disabled")]}
     print("配置完成 / setup done:", summary)
     return summary
 

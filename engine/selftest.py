@@ -129,5 +129,92 @@ _res4 = _rd.read_tool({"format": "vscdb-kv", "dialect": "cursor",
                        "vscdb_sources": [{"db_glob": str(vdir / "state.vscdb"), "table": "Item;DROP", "key_like": "%"}]}, 0.0, 2000, 999)
 check("vscdb rejects bad table name", _res4.status == "parse_error")
 
+# 8. 运行时自动发现（detect）：分类靠实测，不臆想路径
+from engine import detect as _dt
+
+# 8a. 明文 SQLite 魔数 vs 加密库
+_pd = Path(tempfile.mkdtemp())
+_plain = _pd / "plain.db"
+_psql = _sq.connect(str(_plain)); _psql.execute("CREATE TABLE t (x)"); _psql.commit(); _psql.close()
+check("detect: plain sqlite magic ok", _dt._sqlite_is_plain(_plain) is True)
+_enc = _pd / "enc.db"
+_enc.write_bytes(b"\x56\xb1\x90\x4d" + b"\x00" * 64)  # 非 SQLite 魔数（模拟厂商加密库头）
+check("detect: encrypted db flagged not-plain", _dt._sqlite_is_plain(_enc) is False)
+
+# 8b. messages 表识别
+_mdb = _pd / "msg.db"
+_m = _sq.connect(str(_mdb))
+_m.execute("CREATE TABLE messages (role TEXT, content TEXT, timestamp REAL, session_id TEXT)")
+_m.commit(); _m.close()
+check("detect: messages table recognized", _dt._sqlite_has_messages_table(_mdb) is True)
+check("detect: non-messages db -> False", _dt._sqlite_has_messages_table(_plain) is False)
+
+# 8c. writeback 目标未确认时不臆想路径（探测一个不存在的 fork 目录）
+_klass, _fmt, _dia, _src, _reason, _extra = _dt._classify_vscode_fork(
+    "Trae CN", _pd / "nonexistent" / "User")
+check("detect: unknown vscode layout -> unknown class", _klass in ("unknown", "writeback"))
+
+# 8d. 写回目标探测：未知 fork（无候选规则目录）返回 (None, None)，绝不臆想路径
+_wb, _wbdir = _dt._resolve_writeback_target("NoSuchForkXYZ")
+check("detect: writeback target None when nothing exists", _wb is None and _wbdir is None)
+
+# 8e. 哨兵常量必须与 apply 逐字一致，否则 detect 扫不到 apply 写的文件（防漂移）
+from engine import apply as _ap
+check("detect: sentinel matches apply BEGIN", _dt.SENTINEL_BEGIN == _ap.SENTINEL_BEGIN)
+
+# 8f. scan 策略：扫到带哨兵的已有文件就复用它（不管文件名叫什么），不靠命名
+_rules = Path(tempfile.mkdtemp())
+(_rules / "我自己起的名字.md").write_text(
+    "用户手建的规则，没有哨兵", encoding="utf-8")
+_mine = _rules / "rule-9999.md"   # 名字完全不带 ai-reflect，模拟用户自定义命名
+_mine.write_text(f"标题\n{_ap.SENTINEL_BEGIN}\n旧内容\n{_ap.SENTINEL_END}\n", encoding="utf-8")
+_hit = _dt._scan_dir_for_sentinel(_rules)
+check("detect: scan reuses sentinel file regardless of name", _hit == _mine)
+
+# 8g. scan 策略：目录里没有带哨兵的文件 -> 返回 None（让上层用新前缀名新建）
+_empty = Path(tempfile.mkdtemp())
+(_empty / "别人的规则.md").write_text("无哨兵", encoding="utf-8")
+check("detect: scan returns None when no sentinel present",
+      _dt._scan_dir_for_sentinel(_empty) is None)
+
+# 9. 写回引擎 scan 模式：apply.resolve_writeback_target / write_back 端到端
+# 9a. scan 命中已有哨兵文件 -> 复用其真实路径（文件名用户可改）
+_wbdir = Path(tempfile.mkdtemp())
+_existing = _wbdir / "用户改的名字.md"
+_existing.write_text(f"我的规则\n{_ap.SENTINEL_BEGIN}\n旧画像\n{_ap.SENTINEL_END}\n", encoding="utf-8")
+_adp_scan = {"id": "trae-cn", "writeback_strategy": "scan",
+             "writeback_dir": str(_wbdir), "global_config": str(_wbdir / "ai-reflect.md")}
+check("apply: scan resolves to existing sentinel file",
+      _ap.resolve_writeback_target(_adp_scan) == _existing)
+
+# 9b. scan 未命中哨兵 -> 用 global_config 新建名（不臆想，落在真实目录内）
+_wbdir2 = Path(tempfile.mkdtemp())
+_adp_new = {"id": "trae-cn", "writeback_strategy": "scan",
+            "writeback_dir": str(_wbdir2), "global_config": str(_wbdir2 / "ai-reflect.md")}
+check("apply: scan falls back to new-name in real dir",
+      _ap.resolve_writeback_target(_adp_new) == _wbdir2 / "ai-reflect.md")
+
+# 9c. scan 目录不存在 -> None（不往不存在的目录写）
+_adp_gone = {"id": "trae-cn", "writeback_strategy": "scan",
+             "writeback_dir": str(_wbdir2 / "已被删"), "global_config": str(_wbdir2 / "x.md")}
+check("apply: scan returns None when dir missing",
+      _ap.resolve_writeback_target(_adp_gone) is None)
+
+# 9d. write_back 端到端：把目标目录加进白名单后，更新哨兵区块、保留区块外原文
+P.ADAPTERS = P.SYNCED / "adapters.json"
+P.save_json(P.ADAPTERS, {"tools": [
+    {"id": "trae-cn", "enabled": True, "writeback_dir": str(_wbdir),
+     "global_config": str(_wbdir / "ai-reflect.md")}]})
+_r = _ap.write_back(_adp_scan, "新画像内容", backup=False)
+_after = _existing.read_text(encoding="utf-8")
+check("apply: write_back writes to scanned file",
+      _r["status"] == "written" and _r["target"] == str(_existing))
+check("apply: write_back updates block, keeps outside text",
+      "新画像内容" in _after and "我的规则" in _after and "旧画像" not in _after)
+
+# 9e. write_back 目录不存在 -> status=skipped，绝不乱写
+_r2 = _ap.write_back(_adp_gone, "x", backup=False)
+check("apply: write_back skips when target unresolvable", _r2["status"] == "skipped")
+
 print("\nRESULT:", "ALL PASS" if ok else "SOME FAILED")
 sys.exit(0 if ok else 1)
